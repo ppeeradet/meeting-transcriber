@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,11 @@ from .core import JobStore, Worker
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("MEETING_TRANSCRIBER_DATA", BASE_DIR / "data"))
+TOKEN_PATH = DATA_DIR / "access-token.txt"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+if not TOKEN_PATH.exists():
+    TOKEN_PATH.write_text(secrets.token_urlsafe(32), encoding="utf-8")
+ACCESS_TOKEN = os.environ.get("MEETING_TRANSCRIBER_TOKEN", TOKEN_PATH.read_text(encoding="utf-8").strip())
 store = JobStore(DATA_DIR)
 worker = Worker(store)
 app = FastAPI(title="Meeting Transcriber", version="1.0.0")
@@ -25,6 +31,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+
+def require_access(request: Request) -> None:
+    supplied = request.headers.get("authorization", "")
+    expected = f"Bearer {ACCESS_TOKEN}"
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(401, "ต้องใส่รหัสเข้าถึง")
 
 
 class CreateJobs(BaseModel):
@@ -48,12 +61,12 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "meeting-transcriber", "version": "1.0.0"}
 
 
-@app.get("/api/jobs")
+@app.get("/api/jobs", dependencies=[Depends(require_access)])
 def jobs() -> list[dict]:
     return [asdict(job) for job in store.all()]
 
 
-@app.post("/api/jobs", status_code=202)
+@app.post("/api/jobs", status_code=202, dependencies=[Depends(require_access)])
 def create_jobs(request: CreateJobs) -> list[dict]:
     created = []
     for index, raw_url in enumerate(request.urls, 1):
@@ -67,7 +80,7 @@ def create_jobs(request: CreateJobs) -> list[dict]:
     return created
 
 
-@app.post("/api/uploads", status_code=202)
+@app.post("/api/uploads", status_code=202, dependencies=[Depends(require_access)])
 async def upload_media(
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
@@ -95,7 +108,7 @@ async def upload_media(
     return asdict(job)
 
 
-@app.get("/api/jobs/{job_id}/files/{filename}")
+@app.get("/api/jobs/{job_id}/files/{filename}", dependencies=[Depends(require_access)])
 def download_file(job_id: str, filename: str) -> FileResponse:
     job = store.jobs.get(job_id)
     if not job:
