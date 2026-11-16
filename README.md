@@ -45,6 +45,8 @@ data/
 
 Backend bind ที่ `127.0.0.1` โดยค่าเริ่มต้น GitHub Pages ไม่มี API และไม่มีไฟล์งาน หากต้องการเข้าจากมือถือให้เพิ่ม route ใน Tailscale Serve ภายหลังโดยไม่แก้ route เดิม
 
+การติดตั้งบน Dell ใช้ Tailscale Serve path `/meeting-transcriber` สำหรับ Home Portal และ Funnel แยกที่ HTTPS port `10000` สำหรับ GitHub Pages ทุก API ยกเว้น health check ต้องใช้ access token จาก `data/access-token.txt`
+
 ## ทดสอบ
 
 ```powershell
