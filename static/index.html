@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meeting Transcriber</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <header><span class="eyebrow">PERSONAL AUDIO STUDIO</span><h1>Meeting Transcriber</h1><p>ดึงเสียงเต็มคุณภาพ ใส่ภาพปก และถอดเสียงภาษาไทยบน Dell ของคุณ</p></header>
+    <section class="panel">
+      <label>รหัสเข้าถึง<input id="token" type="password" placeholder="วางรหัสครั้งแรก ระบบจำไว้ในเบราว์เซอร์นี้"></label>
+      <label>URL วิดีโอ <small>ใส่บรรทัดละหนึ่งรายการ</small></label>
+      <textarea id="urls" rows="5" placeholder="https://youtu.be/xmyqhV0f9Go"></textarea>
+      <div class="grid"><label>ชื่อไฟล์ (เมื่อมี URL เดียว)<input id="title" placeholder="ประชุมทีม 17 พฤศจิกายน"></label><label>ภาษา<select id="language"><option value="th">ไทย</option><option value="en">English</option><option value="auto">ตรวจอัตโนมัติ</option></select></label></div>
+      <label class="check"><input id="transcribe" type="checkbox"> ถอดเสียงด้วย Whisper หลังดาวน์โหลด</label>
+      <button id="submit">เริ่มงาน</button><span id="message"></span>
+      <hr>
+      <label>หรือเลือกไฟล์เสียง/วิดีโอจากเครื่อง <small>MP3, MP4, M4A, WAV, WEBM, MOV, MKV, AAC, FLAC, OGG</small></label>
+      <input id="media" type="file" accept="audio/*,video/*,.mkv,.flac,.opus">
+      <button id="upload">อัปโหลดและถอดเสียง</button><span id="upload-message"></span>
+    </section>
+    <section><div class="section-title"><h2>คิวงาน</h2><button class="ghost" id="refresh">รีเฟรช</button></div><div id="jobs" class="jobs"></div></section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
