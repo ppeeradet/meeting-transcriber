@@ -1,0 +1,2 @@
+"""Meeting Transcriber application."""
+
