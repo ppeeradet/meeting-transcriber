@@ -1,0 +1,33 @@
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin: 0 0 36px;
+}
+
+.dashboard-stats article {
+  padding: 18px;
+  border: 1px solid #bd4865;
+  border-radius: 18px;
+  background: #4a0d20cc;
+}
+
+.dashboard-stats b {
+  display: block;
+  color: #ffd59d;
+  font-size: 2rem;
+}
+
+.dashboard-stats span { color: #efbdb5; }
+
+.library-filters {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 14px;
+  margin: 0 0 18px;
+}
+
+@media (max-width: 650px) {
+  .library-filters { grid-template-columns: 1fr; }
+  .dashboard-stats { grid-template-columns: repeat(2, 1fr); }
+}

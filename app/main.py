@@ -20,7 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .core import JobStore, Worker
 from .media import MediaValidationError, probe_media
 from .security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_bearer_token, validate_request_context
-from .services.downloader import DownloadOptions, preview
+from .services.downloader import DownloadOptions, platform_name, preview
 from .services.converter import ConversionOptions
 
 
@@ -126,8 +126,34 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/jobs", dependencies=[Depends(require_access)])
-def jobs() -> list[dict]:
-    return [asdict(job) for job in store.all()]
+def jobs(
+    search: str | None = None,
+    status: str | None = None,
+    platform: str | None = None,
+    media_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    results: list[dict] = []
+    needle = (search or "").strip().casefold()
+    for job in store.all():
+        item = asdict(job)
+        item_platform = "Local File" if job.url.startswith("local://") else platform_name(job.url)
+        if needle and needle not in f"{job.title or ''} {job.url}".casefold():
+            continue
+        if status and job.status != status:
+            continue
+        if platform and item_platform.casefold() != platform.casefold():
+            continue
+        if media_type and job.media_mode != media_type and job.operation != media_type:
+            continue
+        if date_from and job.created_at[:10] < date_from:
+            continue
+        if date_to and job.created_at[:10] > date_to:
+            continue
+        item["platform"] = item_platform
+        results.append(item)
+    return results
 
 
 @app.post("/api/jobs", status_code=202, dependencies=[Depends(require_access)])
