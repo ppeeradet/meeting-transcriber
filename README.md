@@ -1,6 +1,6 @@
-# Meeting Transcriber
+# Personal Media Hub
 
-เครื่องมือส่วนตัวสำหรับดาวน์โหลดเสียงจาก URL คุณภาพสูง ตั้งชื่อไฟล์ ฝังภาพหน้าปก และถอดเสียงภาษาไทยบน Dell PC โดยไฟล์ทั้งหมดเก็บในเครื่องเท่านั้น
+ศูนย์กลางส่วนตัวสำหรับดาวน์โหลด แปลงไฟล์ จัดการสื่อ และถอดเสียงบน PC โดยไฟล์งานเก็บในเครื่องเท่านั้น
 
 ## ความสามารถ
 
@@ -10,9 +10,10 @@
 - เก็บไฟล์เสียงต้นฉบับและสร้าง MP3 VBR คุณภาพสูง
 - ใช้ชื่อคลิปอัตโนมัติหรือกำหนดชื่อเอง
 - ดาวน์โหลดและฝังภาพหน้าปกลงใน MP3
+- แปลงไฟล์เสียง/วิดีโอเป็น MP3, WAV, M4A, FLAC หรือ MP4 โดยเก็บต้นฉบับไว้
 - ถอดเสียงด้วย Faster Whisper เป็น TXT, SRT และ JSON พร้อม timestamp
 - สร้าง `transcript_full.docx` และ `meeting_report.docx` สำหรับ Microsoft Word
-- คิวงานและประวัติแบบ JSON ที่เปิดต่อหลังรีสตาร์ตได้
+- คิวงานและประวัติแบบ SQLite ที่เปิดต่อหลังรีสตาร์ตได้ พร้อมสำเนา JSON ระหว่าง migration
 - FastAPI backend + หน้าเว็บ responsive
 - GitHub Pages เป็นหน้าแนะนำเท่านั้น ไม่อัปโหลดเสียงหรือ transcript
 
@@ -33,6 +34,8 @@ py -m venv .venv
 ```text
 data/
   jobs.json
+  jobs.json.pre-sqlite.bak
+  media_hub.sqlite3
   jobs/<job-id>/
     source.*
     <ชื่อที่กำหนด>.mp3
@@ -44,9 +47,9 @@ data/
 
 ## ความเป็นส่วนตัว
 
-Backend bind ที่ `127.0.0.1` โดยค่าเริ่มต้น GitHub Pages ไม่มี API และไม่มีไฟล์งาน หากต้องการเข้าจากมือถือให้เพิ่ม route ใน Tailscale Serve ภายหลังโดยไม่แก้ route เดิม
+Backend bind ที่ `127.0.0.1` โดยค่าเริ่มต้น GitHub Pages ไม่มี API และไม่มีไฟล์งาน การเข้าจากมือถือใช้ route ภายใน Tailscale โดยไม่เปิด backend สู่สาธารณะ
 
-การติดตั้งบน Dell ใช้ Tailscale Serve path `/meeting-transcriber` สำหรับ Home Portal เท่านั้น และตั้ง `MEETING_REQUIRE_ACCESS=0` ใน `run_server.py` เพื่อไม่ต้องกรอกรหัสภายใน tailnet ห้ามเปิด Public Funnel เมื่อปิดการตรวจรหัส
+การติดตั้งบน Dell ใช้ Tailscale Serve path `/meeting-transcriber` สำหรับ Home Portal เท่านั้น ต้องตรวจ network security ก่อนเลือก deployment mode และห้ามเปิด Public Funnel
 
 GitHub Pages (`docs/`) เป็นระบบแยกที่ประมวลผลบนอุปกรณ์ผู้ใช้ด้วย Transformers.js/Whisper โดยไม่เรียก API ของ Dell และไม่อัปโหลดไฟล์ ผู้ใช้ดาวน์โหลดผลลัพธ์เป็น TXT, SRT และเอกสาร Word-compatible `.doc` ได้ การดาวน์โหลดวิดีโอจาก URL ยังคงใช้ Home Portal เนื่องจากข้อจำกัด cross-origin ของเบราว์เซอร์
 

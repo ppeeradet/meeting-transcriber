@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .database import JobDatabase
+
 
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
@@ -90,14 +92,14 @@ class JobStore:
         self.lock = threading.Lock()
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs_root.mkdir(parents=True, exist_ok=True)
+        self.database = JobDatabase(root)
+        self.migration_report = self.database.migrate_json()
         self.jobs: dict[str, Job] = {}
         self._load()
 
     def _load(self) -> None:
-        if not self.path.exists():
-            return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = self.database.load()
             self.jobs = {item["id"]: Job(**item) for item in payload}
             changed = False
             for job in self.jobs.values():
@@ -119,6 +121,7 @@ class JobStore:
             encoding="utf-8",
         )
         temp.replace(self.path)
+        self.database.save(asdict(j) for j in self.jobs.values())
 
     def add(self, url: str, title: str | None, transcribe: bool, language: str, media_mode: str = "audio", output_format: str = "mp3", quality: str = "v0", embed_cover: bool = True) -> Job:
         job_id = uuid.uuid4().hex[:12]
