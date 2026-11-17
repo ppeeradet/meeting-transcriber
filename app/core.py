@@ -48,7 +48,10 @@ def build_download_command(url: str, output_dir: Path, title: str | None) -> lis
         sys.executable,
         "-m",
         "yt_dlp",
+        "--ignore-config",
         "--no-playlist",
+        "--socket-timeout",
+        "30",
         "--newline",
         "-f",
         "bestaudio/best",
@@ -83,7 +86,10 @@ def build_video_command(url: str, output_dir: Path, title: str | None) -> list[s
         sys.executable,
         "-m",
         "yt_dlp",
+        "--ignore-config",
         "--no-playlist",
+        "--socket-timeout",
+        "30",
         "--newline",
         "-f",
         "bv*+ba/b",
@@ -252,7 +258,8 @@ class Worker:
         self.cancel_events: dict[str, threading.Event] = {}
         self.whisper_models: dict[str, Any] = {}
         self.condition = threading.Condition()
-        threading.Thread(target=self._loop, daemon=True, name="meeting-worker").start()
+        self.thread = threading.Thread(target=self._loop, daemon=True, name="meeting-worker")
+        self.thread.start()
 
     def submit(self, job: Job) -> None:
         with self.condition:
@@ -264,7 +271,7 @@ class Worker:
 
     def snapshot(self) -> dict[str, Any]:
         with self.condition:
-            return {"alive": True, "queue_depth": len(self.queue), "current_job": self.current_job_id}
+            return {"alive": self.thread.is_alive(), "queue_depth": len(self.queue), "current_job": self.current_job_id}
 
     def retry(self, job: Job) -> bool:
         if job.status not in {"failed", "interrupted", "cancelled"}:
@@ -343,6 +350,13 @@ class Worker:
             else:
                 audio_path = self._existing_media(job, directory) if job.checkpoint in {"downloaded", "transcribing"} else None
                 if audio_path is None:
+                    from .security import UnsafeMediaURL, validate_media_url
+
+                    direct_hosts = {item.strip() for item in os.environ.get("MEETING_DIRECT_MEDIA_HOSTS", "").split(",") if item.strip()}
+                    try:
+                        validate_media_url(job.url, direct_hosts=direct_hosts)
+                    except UnsafeMediaURL as exc:
+                        raise RuntimeError(f"URL ไม่ผ่านการตรวจสอบก่อนดาวน์โหลด: {exc}") from exc
                     self.store.update(job, status="downloading", checkpoint="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
                     if job.media_mode == "video":
                         self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")

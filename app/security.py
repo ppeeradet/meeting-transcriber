@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import secrets
 import socket
 from collections.abc import Callable, Iterable
 from urllib.parse import urlsplit
@@ -19,6 +20,12 @@ class UnsafeMediaURL(ValueError):
 
 class UnsafeRequest(ValueError):
     pass
+
+
+def validate_bearer_token(supplied: str, expected_token: str) -> None:
+    expected = f"Bearer {expected_token}"
+    if not secrets.compare_digest(supplied, expected):
+        raise UnsafeRequest("ต้องใส่รหัสเข้าถึง")
 
 
 def validate_request_context(mode: str, client_host: str, host: str, origin: str | None, public_origin: str) -> None:

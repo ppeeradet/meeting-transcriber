@@ -43,6 +43,8 @@ class CoreTests(unittest.TestCase):
         command = build_download_command('https://example.com/video', Path('out'), 'ชื่อประชุม')
         self.assertIn('-k', command)
         self.assertIn('--embed-thumbnail', command)
+        self.assertIn('--ignore-config', command)
+        self.assertNotIn('--cookies-from-browser', command)
         self.assertEqual(command[-1], 'https://example.com/video')
 
     def test_video_command_uses_best_video_and_audio(self):

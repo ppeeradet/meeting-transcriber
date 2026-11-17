@@ -1,7 +1,7 @@
 import socket
 import unittest
 
-from app.security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_media_url, validate_request_context
+from app.security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_bearer_token, validate_media_url, validate_request_context
 
 
 def public_dns(host, port, type=socket.SOCK_STREAM):
@@ -19,6 +19,11 @@ class SecurityTests(unittest.TestCase):
             validate_request_context("tailnet", "100.64.0.2", "dell-pc.tail187694.ts.net", None, "https://dell-pc.tail187694.ts.net")
         with self.assertRaisesRegex(UnsafeRequest, "Origin"):
             validate_request_context("tailnet", "127.0.0.1", "dell-pc.tail187694.ts.net", "https://evil.example", "https://dell-pc.tail187694.ts.net")
+
+    def test_token_mode_requires_exact_bearer_token(self):
+        validate_bearer_token("Bearer secret-value", "secret-value")
+        with self.assertRaisesRegex(UnsafeRequest, "รหัสเข้าถึง"):
+            validate_bearer_token("Bearer wrong", "secret-value")
 
     def test_allows_supported_https_platform(self):
         self.assertEqual(validate_media_url("https://youtu.be/demo", resolver=public_dns), "https://youtu.be/demo")

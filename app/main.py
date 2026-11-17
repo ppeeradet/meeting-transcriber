@@ -18,7 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .core import JobStore, Worker
 from .media import MediaValidationError, probe_media
-from .security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_request_context
+from .security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_bearer_token, validate_request_context
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -53,10 +53,10 @@ def require_access(request: Request) -> None:
         raise HTTPException(403, str(exc)) from exc
     if DEPLOYMENT_MODE == "tailnet":
         return
-    supplied = request.headers.get("authorization", "")
-    expected = f"Bearer {ACCESS_TOKEN}"
-    if not secrets.compare_digest(supplied, expected):
-        raise HTTPException(401, "ต้องใส่รหัสเข้าถึง")
+    try:
+        validate_bearer_token(request.headers.get("authorization", ""), ACCESS_TOKEN)
+    except UnsafeRequest as exc:
+        raise HTTPException(401, str(exc)) from exc
 
 
 class CreateJobs(BaseModel):
