@@ -1,6 +1,6 @@
 # Personal Media Hub v2.0 — Repository and Runtime Audit
 
-Audit date: 2026-11-17 (Asia/Bangkok)  
+Audit date: 2026-11-17 (Asia/Bangkok)
 Audited baseline: `origin/main` at `03d7a59`
 
 ## Verified repository state
