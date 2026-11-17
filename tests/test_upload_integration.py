@@ -54,7 +54,7 @@ class UploadIntegrationTests(unittest.TestCase):
 
     def test_upload_creates_job_only_after_complete_file(self):
         upload = FakeUpload(b"valid-media", "เสียงประชุม.mp3")
-        payload = run_immediate(main_module.upload_media(upload, title="ประชุม", language="th"))
+        payload = run_immediate(main_module.upload_media(upload, title="ประชุม", language="th", model_profile="balanced"))
         target = Path(payload["input_path"])
         self.assertTrue(target.is_file())
         self.assertEqual(target.read_bytes(), b"valid-media")
@@ -64,6 +64,6 @@ class UploadIntegrationTests(unittest.TestCase):
         before = len(main_module.store.jobs)
         upload = FakeUpload(b"", "empty.mp3")
         with self.assertRaises(HTTPException) as caught:
-            run_immediate(main_module.upload_media(upload, title=None, language="th"))
+            run_immediate(main_module.upload_media(upload, title=None, language="th", model_profile="balanced"))
         self.assertEqual(caught.exception.status_code, 400)
         self.assertEqual(len(main_module.store.jobs), before)

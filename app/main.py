@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import uuid
 import importlib
+import json
 from importlib import metadata
 from dataclasses import asdict
 from pathlib import Path
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .core import JobStore, Worker
+from .core import JobStore, Worker, utc_now
 from .media import MediaValidationError, probe_media
 from .security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_bearer_token, validate_request_context
 from .services.downloader import DownloadOptions, platform_name, preview
@@ -71,10 +72,22 @@ class CreateJobs(BaseModel):
     output_format: str = Field(default="mp3", pattern="^(original|mp3|m4a|wav|flac|mp4)$")
     quality: str = Field(default="v0", pattern="^(v0|320|256|192|128|best|1080|720|480|360)$")
     embed_cover: bool = True
+    model_profile: str = Field(default="balanced", pattern="^(fast|balanced|high)$")
 
 
 class PreviewRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+
+
+class TranscriptSegment(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+    text: str = Field(max_length=20_000)
+
+
+class TranscriptUpdate(BaseModel):
+    language: str = Field(default="auto", max_length=20)
+    segments: list[TranscriptSegment] = Field(max_length=100_000)
 
 
 ALLOWED_UPLOADS = {".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mov", ".mkv", ".aac", ".flac", ".ogg", ".opus", ".mpeg", ".mpg"}
@@ -170,7 +183,7 @@ def create_jobs(request: CreateJobs) -> list[dict]:
     created = []
     for url in urls:
         title = request.title if len(urls) == 1 else None
-        job = store.add(url, title, request.transcribe, request.language, request.media_mode, request.output_format, request.quality, request.embed_cover)
+        job = store.add(url, title, request.transcribe, request.language, request.media_mode, request.output_format, request.quality, request.embed_cover, request.model_profile)
         worker.submit(job)
         created.append(asdict(job))
     return created
@@ -193,7 +206,10 @@ async def upload_media(
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
     language: str = Form(default="th"),
+    model_profile: str = Form(default="balanced"),
 ) -> dict:
+    if model_profile not in {"fast", "balanced", "high"}:
+        raise HTTPException(400, "โปรไฟล์ Whisper ไม่รองรับ")
     filename = file.filename or "upload"
     if Path(filename).suffix.lower() not in ALLOWED_UPLOADS:
         raise HTTPException(415, "รองรับไฟล์เสียง/วิดีโอทั่วไป เช่น MP3, MP4, M4A, WAV, WEBM, MOV, MKV, AAC, FLAC, OGG")
@@ -218,13 +234,49 @@ async def upload_media(
             probe_media(target)
         except MediaValidationError as exc:
             raise HTTPException(415, str(exc)) from exc
-        job = store.add_local_file(target, filename, title, language)
+        job = store.add_local_file(target, filename, title, language, model_profile=model_profile)
     except Exception:
         target.unlink(missing_ok=True)
         raise
     finally:
         await file.close()
     worker.submit(job)
+    return asdict(job)
+
+
+@app.get("/api/jobs/{job_id}/transcript", dependencies=[Depends(require_access)])
+def get_transcript(job_id: str) -> dict:
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "ไม่พบงาน")
+    path = Path(job.output_dir) / "transcript.json"
+    if not path.is_file():
+        raise HTTPException(404, "งานนี้ยังไม่มีผลถอดเสียง")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(500, "ไฟล์ถอดเสียงเสียหาย") from exc
+
+
+@app.put("/api/jobs/{job_id}/transcript", dependencies=[Depends(require_access)])
+def update_transcript(job_id: str, request: TranscriptUpdate) -> dict:
+    from .services.exporter import export_transcript
+
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "ไม่พบงาน")
+    rows = [segment.model_dump() for segment in request.segments]
+    for index, row in enumerate(rows, 1):
+        if row["end"] < row["start"]:
+            raise HTTPException(400, f"ช่วงที่ {index}: เวลาสิ้นสุดต้องไม่น้อยกว่าเวลาเริ่ม")
+    store.update(job, status="exporting", checkpoint="exporting", progress="กำลังสร้างไฟล์จากข้อความที่แก้ไข")
+    try:
+        export_transcript(Path(job.output_dir), job.title or "รายงานการประชุม", job.url, request.language, rows, utc_now())
+        files = sorted(path.name for path in Path(job.output_dir).iterdir() if path.is_file())
+        store.update(job, status="completed", checkpoint="completed", progress="บันทึกข้อความและสร้างเอกสารแล้ว", files=files)
+    except Exception as exc:
+        store.update(job, status="failed", progress="สร้างเอกสารไม่สำเร็จ", error=str(exc))
+        raise HTTPException(500, "สร้างเอกสารไม่สำเร็จ") from exc
     return asdict(job)
 
 

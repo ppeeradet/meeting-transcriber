@@ -1,6 +1,8 @@
 const base = location.pathname.replace(/\/$/, "");
 const jobsEl = document.querySelector("#jobs");
 const msg = document.querySelector("#message");
+const jobsById = new Map();
+let editorJob = null;
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 })[character]);
@@ -15,6 +17,8 @@ function progressInfo(job) {
 }
 
 function renderJobs(jobs) {
+  jobsById.clear();
+  jobs.forEach((job) => jobsById.set(job.id, job));
   if (!jobs.length) { jobsEl.innerHTML = "<p>ไม่พบงานตามตัวกรอง</p>"; return; }
   jobsEl.innerHTML = jobs.map((job) => {
     const info = progressInfo(job);
@@ -23,7 +27,8 @@ function renderJobs(jobs) {
     const retry = ["failed", "interrupted", "cancelled"].includes(job.status) ? `<button class="ghost retry" data-job="${esc(job.id)}">ลองใหม่</button>` : "";
     const cancel = ["queued", "downloading", "converting", "transcribing"].includes(job.status) ? `<button class="ghost cancel-job" data-job="${esc(job.id)}">ยกเลิกงาน</button>` : "";
     const files = job.files.map((file) => `<button class="ghost file" data-job="${esc(job.id)}" data-file="${esc(file)}">ดาวน์โหลด ${esc(file)}</button>`).join("");
-    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><span class="status">${esc(job.status)}</span></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p><div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${files}${retry}${cancel}</div></article>`;
+    const edit = job.files.includes("transcript.json") ? `<button class="ghost edit-transcript" data-job="${esc(job.id)}">แก้ไขถอดเสียง</button>` : "";
+    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><span class="status">${esc(job.status)}</span></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p><div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}</div></article>`;
   }).join("");
 }
 
@@ -61,7 +66,7 @@ document.querySelector("#submit").onclick = async () => {
   msg.textContent = "กำลังเพิ่มงาน…";
   const response = await fetch(`${base}/api/jobs`, {
     method: "POST", headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({ urls, title: document.querySelector("#title").value || null, transcribe: document.querySelector("#transcribe").checked, language: document.querySelector("#language").value, media_mode: document.querySelector("#media-mode").value, output_format: document.querySelector("#output-format").value, quality: document.querySelector("#quality").value, embed_cover: document.querySelector("#embed-cover").checked }),
+    body: JSON.stringify({ urls, title: document.querySelector("#title").value || null, transcribe: document.querySelector("#transcribe").checked, language: document.querySelector("#language").value, model_profile: document.querySelector("#model-profile").value, media_mode: document.querySelector("#media-mode").value, output_format: document.querySelector("#output-format").value, quality: document.querySelector("#quality").value, embed_cover: document.querySelector("#embed-cover").checked }),
   });
   msg.textContent = response.ok ? "เพิ่มงานแล้ว" : `เกิดข้อผิดพลาด: ${await response.text()}`;
   if (response.ok) { document.querySelector("#urls").value = ""; load(); }
@@ -97,10 +102,61 @@ async function upload(endpoint, fileSelector, messageSelector, extra) {
   if (response.ok) { fileInput.value = ""; load(); }
 }
 
-document.querySelector("#upload").onclick = () => upload("/api/uploads", "#media", "#upload-message", { title: document.querySelector("#title").value || "", language: document.querySelector("#language").value });
+document.querySelector("#upload").onclick = () => upload("/api/uploads", "#media", "#upload-message", { title: document.querySelector("#title").value || "", language: document.querySelector("#language").value, model_profile: document.querySelector("#model-profile").value });
 document.querySelector("#convert-submit").onclick = () => upload("/api/conversions", "#convert-media", "#convert-message", { output_format: document.querySelector("#convert-format").value, bitrate: document.querySelector("#convert-bitrate").value, resolution: document.querySelector("#convert-resolution").value, title: document.querySelector("#title").value || "" });
 
+function formatEditorTime(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = (seconds % 60).toFixed(1).padStart(4, "0");
+  return `${minutes}:${remainder}`;
+}
+
+async function openTranscript(job) {
+  const response = await fetch(`${base}/api/jobs/${encodeURIComponent(job.id)}/transcript`, { headers: headers() });
+  if (!response.ok) { alert(await response.text()); return; }
+  const data = await response.json();
+  editorJob = { ...job, language: data.language || job.language };
+  document.querySelector("#editor-title").textContent = job.title || "ตรวจสอบผลถอดเสียง";
+  document.querySelector("#editor-segments").innerHTML = data.segments.map((segment, index) => `<article class="editor-segment" data-index="${index}" data-start="${Number(segment.start)}" data-end="${Number(segment.end)}"><button class="ghost seek" type="button">▶ ${formatEditorTime(Number(segment.start))}</button><textarea aria-label="ข้อความช่วงที่ ${index + 1}">${esc(segment.text)}</textarea></article>`).join("");
+  const audioFile = job.files.find((file) => /\.(mp3|m4a|wav|flac|ogg|opus|mp4|webm)$/i.test(file));
+  const audio = document.querySelector("#editor-audio");
+  audio.hidden = !audioFile;
+  audio.src = audioFile ? `${base}/api/jobs/${encodeURIComponent(job.id)}/files/${encodeURIComponent(audioFile)}` : "";
+  document.querySelector("#editor-message").textContent = "";
+  document.querySelector("#transcript-editor").hidden = false;
+  document.querySelector("#transcript-editor").scrollIntoView({ behavior: "smooth" });
+}
+
+document.querySelector("#editor-segments").onclick = (event) => {
+  const seek = event.target.closest(".seek");
+  if (!seek) return;
+  const audio = document.querySelector("#editor-audio");
+  audio.currentTime = Number(seek.closest(".editor-segment").dataset.start);
+  audio.play();
+};
+document.querySelector("#editor-search").oninput = (event) => {
+  const needle = event.target.value.trim().toLocaleLowerCase("th");
+  document.querySelectorAll(".editor-segment").forEach((row) => { row.hidden = needle && !row.querySelector("textarea").value.toLocaleLowerCase("th").includes(needle); });
+};
+document.querySelector("#editor-copy").onclick = async () => {
+  const text = [...document.querySelectorAll(".editor-segment textarea")].map((field) => field.value).join("\n");
+  await navigator.clipboard.writeText(text);
+  document.querySelector("#editor-message").textContent = "คัดลอกข้อความแล้ว";
+};
+document.querySelector("#editor-save").onclick = async () => {
+  if (!editorJob) return;
+  const segments = [...document.querySelectorAll(".editor-segment")].map((row) => ({ start: Number(row.dataset.start), end: Number(row.dataset.end), text: row.querySelector("textarea").value }));
+  const output = document.querySelector("#editor-message");
+  output.textContent = "กำลังบันทึกและสร้างเอกสาร…";
+  const response = await fetch(`${base}/api/jobs/${encodeURIComponent(editorJob.id)}/transcript`, { method: "PUT", headers: headers({ "content-type": "application/json" }), body: JSON.stringify({ language: editorJob.language, segments }) });
+  output.textContent = response.ok ? "บันทึกและสร้างไฟล์ TXT, SRT, VTT, JSON, Markdown และ DOCX แล้ว" : `บันทึกไม่สำเร็จ: ${await response.text()}`;
+  if (response.ok) load();
+};
+document.querySelector("#editor-close").onclick = () => { document.querySelector("#transcript-editor").hidden = true; document.querySelector("#editor-audio").pause(); };
+
 jobsEl.onclick = async (event) => {
+  const editButton = event.target.closest(".edit-transcript");
+  if (editButton) { await openTranscript(jobsById.get(editButton.dataset.job)); return; }
   const fileButton = event.target.closest(".file");
   if (fileButton) {
     const url = `${base}/api/jobs/${encodeURIComponent(fileButton.dataset.job)}/files/${encodeURIComponent(fileButton.dataset.file)}`;

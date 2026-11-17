@@ -1,7 +1,9 @@
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core import JobStore, Worker, build_download_command, build_video_command, safe_name, srt_timestamp, transcription_language
 
@@ -113,6 +115,25 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertTrue(Path(job.input_path).is_file())
             self.assertEqual(Path(job.input_path).name, '_CON.mp3')
+
+    def test_whisper_profiles_map_to_expected_models_and_cache(self):
+        created = []
+
+        class FakeModel:
+            def __init__(self, name, **kwargs):
+                created.append((name, kwargs))
+
+        worker = Worker.__new__(Worker)
+        worker.whisper_models = {}
+        fake_module = types.SimpleNamespace(WhisperModel=FakeModel)
+        with patch.dict("sys.modules", {"faster_whisper": fake_module}), patch.dict("os.environ", {}, clear=True):
+            first = worker._whisper_model("fast")
+            second = worker._whisper_model("fast")
+            worker._whisper_model("balanced")
+            worker._whisper_model("high")
+        self.assertIs(first, second)
+        self.assertEqual([item[0] for item in created], ["small", "medium", "large-v3"])
+        self.assertTrue(all(item[1]["compute_type"] == "int8" for item in created))
 
 
 if __name__ == '__main__':
