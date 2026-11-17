@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -375,18 +376,22 @@ class Worker:
                         self.current_process = process
                     assert process.stdout is not None
                     log_path = directory / "download.log"
+                    recent_output: deque[str] = deque(maxlen=80)
                     with log_path.open("w", encoding="utf-8") as log:
                         for line in process.stdout:
                             if self._cancelled(job):
                                 process.terminate()
                                 raise JobCancelled()
                             log.write(line)
+                            recent_output.append(line)
                             if "[download]" in line and "%" in line:
                                 self.store.update(job, progress=line.strip()[-140:])
                     if process.wait() != 0:
                         if self._cancelled(job):
                             raise JobCancelled()
-                        raise RuntimeError("ดาวน์โหลดไม่สำเร็จ กรุณาดู download.log")
+                        from .services.downloader import classify_download_error
+
+                        raise RuntimeError(classify_download_error("".join(recent_output)))
                     audio_path = self._existing_media(job, directory)
                     if audio_path is None:
                         raise RuntimeError("ไม่พบไฟล์สื่อหลังดาวน์โหลด")

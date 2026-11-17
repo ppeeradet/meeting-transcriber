@@ -1,10 +1,16 @@
 import unittest
 from pathlib import Path
 
-from app.services.downloader import DownloadOptions, build_command, parse_preview, platform_name, preview_command
+from app.services.downloader import DownloadOptions, build_command, classify_download_error, parse_preview, platform_name, preview_command
 
 
 class DownloaderTests(unittest.TestCase):
+    def test_download_errors_are_classified_for_users(self):
+        self.assertIn("Login required", classify_download_error("ERROR: Sign in to confirm you’re not a bot"))
+        self.assertIn("Private content", classify_download_error("ERROR: Private video"))
+        self.assertIn("Network error", classify_download_error("Unable to download webpage: timed out"))
+        self.assertIn("FFmpeg error", classify_download_error("Postprocessing: ffmpeg exited with code 1"))
+        self.assertIn("Insufficient disk space", classify_download_error("No space left on device"))
     def test_audio_profiles(self):
         mp3 = build_command("https://youtu.be/demo", Path("out"), "ชื่อ", DownloadOptions("audio", "mp3", "320", True))
         self.assertIn("320K", mp3)

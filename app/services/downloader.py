@@ -16,6 +16,25 @@ AUDIO_QUALITIES = {"v0", "320", "256", "192", "128"}
 VIDEO_QUALITIES = {"best", "1080", "720", "480", "360"}
 
 
+def classify_download_error(output: str) -> str:
+    message = output.casefold()
+    rules = (
+        (("unsupported url", "no suitable extractor"), "Unsupported URL — แพลตฟอร์มหรือลิงก์นี้ยังไม่รองรับ"),
+        (("sign in", "login required", "cookies are required", "confirm you’re not a bot", "confirm you're not a bot"), "Login required — เนื้อหานี้ต้องเข้าสู่ระบบและระบบไม่อ่าน browser cookies อัตโนมัติ"),
+        (("private video", "private content", "this account is private"), "Private content — ไม่มีสิทธิ์เข้าถึงเนื้อหานี้"),
+        (("video unavailable", "not available", "has been removed"), "Video unavailable — เนื้อหาถูกลบหรือไม่พร้อมใช้งาน"),
+        (("unable to download webpage", "timed out", "temporary failure", "network is unreachable", "connection reset"), "Network error — เชื่อมต่อแหล่งสื่อไม่สำเร็จ"),
+        (("update to a newer version", "extractor", "signature extraction failed"), "Extractor outdated — กรุณาอัปเดต yt-dlp"),
+        (("ffmpeg", "ffprobe"), "FFmpeg error — แปลงหรือรวมสื่อไม่สำเร็จ"),
+        (("no space left", "not enough space", "disk full"), "Insufficient disk space — พื้นที่ดิสก์ไม่เพียงพอ"),
+        (("file is larger", "max-filesize"), "File too large — ไฟล์ใหญ่เกินขีดจำกัด"),
+    )
+    for patterns, label in rules:
+        if any(pattern in message for pattern in patterns):
+            return label
+    return "Download failed — ดาวน์โหลดไม่สำเร็จ กรุณาดู download.log"
+
+
 @dataclass(frozen=True)
 class DownloadOptions:
     media_mode: str = "audio"
