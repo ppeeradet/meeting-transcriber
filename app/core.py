@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -120,6 +121,10 @@ class Job:
     checkpoint: str = "created"
 
 
+class JobCancelled(RuntimeError):
+    pass
+
+
 class JobStore:
     def __init__(self, root: Path):
         self.root = root
@@ -195,6 +200,32 @@ class JobStore:
             self._save()
         return job
 
+    def add_local_file(self, source: Path, filename: str, title: str | None, language: str) -> Job:
+        job_id = uuid.uuid4().hex[:12]
+        directory = self.jobs_root / job_id
+        directory.mkdir(parents=True)
+        target = directory / safe_name(Path(filename).name, "upload")
+        try:
+            shutil.move(str(source), str(target))
+            job = Job(
+                id=job_id,
+                url=f"local://{target.name}",
+                input_path=str(target),
+                title=title or Path(filename).stem,
+                transcribe=True,
+                language=language,
+                output_dir=str(directory),
+                checkpoint="uploaded",
+            )
+            with self.lock:
+                self.jobs[job.id] = job
+                self._save()
+            return job
+        except Exception:
+            target.unlink(missing_ok=True)
+            directory.rmdir()
+            raise
+
     def update(self, job: Job, **changes: Any) -> None:
         with self.lock:
             for key, value in changes.items():
@@ -212,6 +243,8 @@ class Worker:
         self.queue: list[str] = [job.id for job in store.all() if job.status == "queued"]
         self.enqueued: set[str] = set(self.queue)
         self.current_job_id: str | None = None
+        self.current_process: subprocess.Popen[str] | None = None
+        self.cancel_events: dict[str, threading.Event] = {}
         self.condition = threading.Condition()
         threading.Thread(target=self._loop, daemon=True, name="meeting-worker").start()
 
@@ -227,6 +260,27 @@ class Worker:
         with self.condition:
             return {"alive": True, "queue_depth": len(self.queue), "current_job": self.current_job_id}
 
+    def retry(self, job: Job) -> bool:
+        if job.status not in {"failed", "interrupted", "cancelled"}:
+            return False
+        self.store.update(job, status="queued", progress="รอลองใหม่", error=None)
+        self.submit(job)
+        return True
+
+    def cancel(self, job: Job) -> bool:
+        with self.condition:
+            if job.id in self.enqueued:
+                self.queue = [item for item in self.queue if item != job.id]
+                self.enqueued.discard(job.id)
+                self.store.update(job, status="cancelled", progress="ยกเลิกแล้ว")
+                return True
+            if job.id == self.current_job_id:
+                self.cancel_events.setdefault(job.id, threading.Event()).set()
+                if self.current_process and self.current_process.poll() is None:
+                    self.current_process.terminate()
+                return True
+        return False
+
     def _loop(self) -> None:
         while True:
             with self.condition:
@@ -235,60 +289,81 @@ class Worker:
                 job_id = self.queue.pop(0)
                 self.enqueued.discard(job_id)
                 self.current_job_id = job_id
+                self.cancel_events[job_id] = threading.Event()
             job = self.store.jobs.get(job_id)
             try:
                 if job and job.status == "queued":
                     self._run(job)
             finally:
                 with self.condition:
+                    self.cancel_events.pop(job_id, None)
+                    self.current_process = None
                     self.current_job_id = None
+
+    def _cancelled(self, job: Job) -> bool:
+        return self.cancel_events.get(job.id, threading.Event()).is_set()
+
+    def _existing_media(self, job: Job, directory: Path) -> Path | None:
+        patterns = ("*.mp4", "*.mkv", "*.webm") if job.media_mode == "video" else ("*.mp3", "*.m4a", "*.wav", "*.flac")
+        for pattern in patterns:
+            for path in directory.glob(pattern):
+                if path.is_file() and path.stat().st_size > 0:
+                    return path
+        return None
 
     def _run(self, job: Job) -> None:
         directory = Path(job.output_dir)
         try:
+            if self._cancelled(job):
+                raise JobCancelled()
             if job.input_path:
                 audio_path = Path(job.input_path)
                 if not audio_path.is_file():
                     raise RuntimeError("ไม่พบไฟล์ที่อัปโหลด")
             else:
-                self.store.update(job, status="downloading", checkpoint="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
-                if job.media_mode == "video":
-                    self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")
-                    command = build_video_command(job.url, directory, job.title)
-                else:
-                    command = build_download_command(job.url, directory, job.title)
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                assert process.stdout is not None
-                log_path = directory / "download.log"
-                with log_path.open("w", encoding="utf-8") as log:
-                    for line in process.stdout:
-                        log.write(line)
-                        if "[download]" in line and "%" in line:
-                            self.store.update(job, progress=line.strip()[-140:])
-                if process.wait() != 0:
-                    raise RuntimeError("ดาวน์โหลดไม่สำเร็จ กรุณาดู download.log")
-                if job.media_mode == "video":
-                    media_files = [*directory.glob("*.mp4"), *directory.glob("*.mkv"), *directory.glob("*.webm")]
-                    if not media_files:
-                        raise RuntimeError("ไม่พบไฟล์วิดีโอหลังดาวน์โหลด")
-                    audio_path = media_files[0]
-                else:
-                    mp3s = list(directory.glob("*.mp3"))
-                    if not mp3s:
-                        raise RuntimeError("ไม่พบไฟล์ MP3 หลังดาวน์โหลด")
-                    audio_path = mp3s[0]
+                audio_path = self._existing_media(job, directory) if job.checkpoint in {"downloaded", "transcribing"} else None
+                if audio_path is None:
+                    self.store.update(job, status="downloading", checkpoint="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
+                    if job.media_mode == "video":
+                        self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")
+                        command = build_video_command(job.url, directory, job.title)
+                    else:
+                        command = build_download_command(job.url, directory, job.title)
+                    process = subprocess.Popen(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    with self.condition:
+                        self.current_process = process
+                    assert process.stdout is not None
+                    log_path = directory / "download.log"
+                    with log_path.open("w", encoding="utf-8") as log:
+                        for line in process.stdout:
+                            if self._cancelled(job):
+                                process.terminate()
+                                raise JobCancelled()
+                            log.write(line)
+                            if "[download]" in line and "%" in line:
+                                self.store.update(job, progress=line.strip()[-140:])
+                    if process.wait() != 0:
+                        if self._cancelled(job):
+                            raise JobCancelled()
+                        raise RuntimeError("ดาวน์โหลดไม่สำเร็จ กรุณาดู download.log")
+                    audio_path = self._existing_media(job, directory)
+                    if audio_path is None:
+                        raise RuntimeError("ไม่พบไฟล์สื่อหลังดาวน์โหลด")
+                    self.store.update(job, checkpoint="downloaded")
             if job.transcribe:
                 self._transcribe(job, audio_path)
             files = [p.name for p in directory.iterdir() if p.is_file()]
             self.store.update(job, status="completed", checkpoint="completed", progress="เสร็จสมบูรณ์", files=sorted(files))
+        except JobCancelled:
+            self.store.update(job, status="cancelled", progress="ยกเลิกแล้ว", error=None)
         except Exception as exc:  # worker boundary: retain error for UI
             self.store.update(job, status="failed", progress="งานล้มเหลว", error=str(exc))
 
@@ -304,6 +379,8 @@ class Worker:
         txt: list[str] = []
         srt: list[str] = []
         for index, segment in enumerate(segments, 1):
+            if self._cancelled(job):
+                raise JobCancelled()
             text = segment.text.strip()
             rows.append({"start": segment.start, "end": segment.end, "text": text})
             txt.append(f"[{srt_timestamp(segment.start).replace(',', '.')}] {text}")
