@@ -200,7 +200,17 @@ class JobStore:
             directory.rmdir()
             raise
 
-    def add_existing_file(self, source: Path, title: str | None, language: str, model_profile: str = "balanced") -> Job:
+    def add_existing_file(
+        self,
+        source: Path,
+        title: str | None,
+        language: str,
+        model_profile: str = "balanced",
+        operation: str = "transcribe",
+        output_format: str = "mp3",
+        bitrate: str = "192",
+        resolution: str = "original",
+    ) -> Job:
         source = source.resolve()
         if not source.is_file() or source.stat().st_size == 0:
             raise ValueError("ไม่พบไฟล์สื่อที่เลือก")
@@ -212,13 +222,16 @@ class JobStore:
             url=f"library://{source.name}",
             input_path=str(source),
             title=title or source.stem,
-            transcribe=True,
+            transcribe=operation == "transcribe",
             language=language,
             output_dir=str(directory),
             checkpoint="linked",
-            operation="transcribe",
+            operation=operation,
             model_profile=model_profile,
             source_size_bytes=source.stat().st_size,
+            output_format=output_format,
+            conversion_bitrate=bitrate,
+            conversion_resolution=resolution,
         )
         with self.lock:
             self.jobs[job.id] = job

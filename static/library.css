@@ -20,6 +20,7 @@
 
 .dashboard-stats span { color: #efbdb5; }
 .media-sizes { color: #ffd59d; font-size: .9rem; }
+.library-preview audio,.library-preview video { width: 100%; max-height: 60vh; margin-top: 12px; }
 
 .library-filters {
   display: grid;

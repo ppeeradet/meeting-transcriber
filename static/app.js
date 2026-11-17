@@ -37,7 +37,8 @@ function renderJobs(jobs) {
     const files = job.files.map((file) => {
       const transcribe = /\.(mp3|mp4|m4a|wav|webm|mov|mkv|aac|flac|ogg|opus|mpeg|mpg)$/i.test(file)
         ? `<button class="ghost transcribe-file" data-job="${esc(job.id)}" data-file="${esc(file)}">ถอดเสียงไฟล์นี้</button>` : "";
-      return `<button class="ghost file" data-job="${esc(job.id)}" data-file="${esc(file)}">ดาวน์โหลด ${esc(file)}</button>${transcribe}`;
+      const mediaActions = transcribe ? `<button class="ghost play-media" data-job="${esc(job.id)}" data-file="${esc(file)}">เล่น</button><button class="ghost convert-file" data-job="${esc(job.id)}" data-file="${esc(file)}">แปลงไฟล์นี้</button>` : "";
+      return `<button class="ghost file" data-job="${esc(job.id)}" data-file="${esc(file)}">ดาวน์โหลด ${esc(file)}</button>${mediaActions}${transcribe}`;
     }).join("");
     const edit = job.files.includes("transcript.json") ? `<button class="ghost edit-transcript" data-job="${esc(job.id)}">แก้ไขถอดเสียง</button>` : "";
     const sizes = job.source_size_bytes ? `<p class="media-sizes">ต้นฉบับ ${formatBytes(job.source_size_bytes)}${job.result_size_bytes ? ` · ผลลัพธ์ ${formatBytes(job.result_size_bytes)}` : ""}</p>` : "";
@@ -170,6 +171,29 @@ document.querySelector("#editor-close").onclick = () => { document.querySelector
 jobsEl.onclick = async (event) => {
   const editButton = event.target.closest(".edit-transcript");
   if (editButton) { await openTranscript(jobsById.get(editButton.dataset.job)); return; }
+  const playButton = event.target.closest(".play-media");
+  if (playButton) {
+    const url = `${base}/api/jobs/${encodeURIComponent(playButton.dataset.job)}/files/${encodeURIComponent(playButton.dataset.file)}`;
+    const video = document.querySelector("#library-video"); const audio = document.querySelector("#library-audio");
+    const isVideo = /\.(mp4|webm|mov|mkv|mpeg|mpg)$/i.test(playButton.dataset.file);
+    video.pause(); audio.pause(); video.hidden = !isVideo; audio.hidden = isVideo;
+    (isVideo ? video : audio).src = url;
+    document.querySelector("#preview-title").textContent = playButton.dataset.file;
+    document.querySelector("#library-preview").hidden = false;
+    document.querySelector("#library-preview").scrollIntoView({ behavior: "smooth" });
+    return;
+  }
+  const convertButton = event.target.closest(".convert-file");
+  if (convertButton) {
+    convertButton.disabled = true; convertButton.textContent = "กำลังเพิ่มเข้าคิว…";
+    const response = await fetch(`${base}/api/jobs/${encodeURIComponent(convertButton.dataset.job)}/convert`, {
+      method: "POST", headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ filename: convertButton.dataset.file, output_format: document.querySelector("#convert-format").value, bitrate: document.querySelector("#convert-bitrate").value, resolution: document.querySelector("#convert-resolution").value }),
+    });
+    if (!response.ok) alert(await response.text());
+    await load();
+    return;
+  }
   const transcribeButton = event.target.closest(".transcribe-file");
   if (transcribeButton) {
     transcribeButton.disabled = true;
@@ -203,6 +227,7 @@ jobsEl.onclick = async (event) => {
 };
 
 document.querySelector("#refresh").onclick = load;
+document.querySelector("#preview-close").onclick = () => { document.querySelector("#library-audio").pause(); document.querySelector("#library-video").pause(); document.querySelector("#library-preview").hidden = true; };
 document.querySelectorAll("#filter-search,#filter-status,#filter-media").forEach((control) => control.addEventListener("input", load));
 load();
 setInterval(load, 4000);

@@ -15,7 +15,7 @@
 - สร้าง `transcript_full.docx` และ `meeting_report.docx` สำหรับ Microsoft Word
 - คิวงานและประวัติแบบ SQLite ที่เปิดต่อหลังรีสตาร์ตได้ พร้อมสำเนา JSON ระหว่าง migration
 - FastAPI backend + หน้าเว็บ responsive
-- GitHub Pages เป็นหน้าแนะนำเท่านั้น ไม่อัปโหลดเสียงหรือ transcript
+- GitHub Pages Browser Edition ถอดเสียงบนอุปกรณ์ด้วย Transformers.js โดยไม่เชื่อมต่อ Dell backend
 
 ## เริ่มใช้งาน
 
@@ -51,7 +51,7 @@ Backend bind ที่ `127.0.0.1` โดยค่าเริ่มต้น Gi
 
 การติดตั้งบน Dell ใช้ Tailscale Serve path `/meeting-transcriber` สำหรับ Home Portal เท่านั้น ต้องตรวจ network security ก่อนเลือก deployment mode และห้ามเปิด Public Funnel
 
-GitHub Pages (`docs/`) เป็นระบบแยกที่ประมวลผลบนอุปกรณ์ผู้ใช้ด้วย Transformers.js/Whisper โดยไม่เรียก API ของ Dell และไม่อัปโหลดไฟล์ ผู้ใช้ดาวน์โหลดผลลัพธ์เป็น TXT, SRT และเอกสาร Word-compatible `.doc` ได้ การดาวน์โหลดวิดีโอจาก URL ยังคงใช้ Home Portal เนื่องจากข้อจำกัด cross-origin ของเบราว์เซอร์
+GitHub Pages (`docs/`) เป็น Browser Edition แยกจาก Dell backend โดยสมบูรณ์ ประมวลผลไฟล์ที่ผู้ใช้เลือกบนอุปกรณ์ด้วย Transformers.js/Whisper และไม่อัปโหลดไฟล์หรือ transcript ไปยัง Dell ผู้ใช้ดาวน์โหลดผลลัพธ์เป็น TXT, SRT และเอกสาร Word-compatible `.doc` ได้ โดยหน้าเว็บระบุชัดว่า `.doc` นี้เป็น HTML ที่ Word เปิดได้ ไม่ใช่ DOCX จริง การดาวน์โหลดจาก URL, Media Converter, Media Library, Transcript Editor และ DOCX จริงใช้ผ่าน Home Portal เท่านั้น
 
 ## ทดสอบ
 

@@ -43,6 +43,22 @@ class MediaLibraryTests(unittest.TestCase):
                 main_module.transcribe_library_file(source_job.id, request)
             self.assertEqual(caught.exception.status_code, 404)
 
+    def test_library_media_can_be_converted_without_copying_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            source_job = store.add("https://youtu.be/demo", "ประชุม", False, "th")
+            media = Path(source_job.output_dir) / "result.mp4"
+            media.write_bytes(b"media")
+            request = main_module.LibraryConversion(filename="result.mp4", output_format="mp3", bitrate="256", resolution="original")
+            with patch.object(main_module, "store", store), patch.object(main_module, "probe_media", return_value={"has_audio": True, "has_video": True}), patch.object(main_module.worker, "submit") as submit:
+                result = main_module.convert_library_file(source_job.id, request)
+            self.assertEqual(Path(result["input_path"]), media.resolve())
+            self.assertEqual(result["operation"], "convert")
+            self.assertEqual(result["output_format"], "mp3")
+            self.assertEqual(result["conversion_bitrate"], "256")
+            self.assertTrue(media.is_file())
+            submit.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
