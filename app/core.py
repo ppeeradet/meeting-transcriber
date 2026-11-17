@@ -13,6 +13,7 @@ from typing import Any
 
 
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 def utc_now() -> str:
@@ -22,7 +23,9 @@ def utc_now() -> str:
 def safe_name(value: str, fallback: str = "meeting") -> str:
     cleaned = INVALID_FILENAME.sub("_", value).strip().strip(".")
     cleaned = re.sub(r"\s+", " ", cleaned)
-    return (cleaned[:120] or fallback)
+    cleaned = cleaned[:120] or fallback
+    stem = cleaned.split(".", 1)[0].upper()
+    return f"_{cleaned}" if stem in WINDOWS_RESERVED else cleaned
 
 
 def srt_timestamp(seconds: float) -> str:
@@ -114,6 +117,7 @@ class Job:
     output_dir: str = ""
     error: str | None = None
     files: list[str] = field(default_factory=list)
+    checkpoint: str = "created"
 
 
 class JobStore:
@@ -133,10 +137,16 @@ class JobStore:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             self.jobs = {item["id"]: Job(**item) for item in payload}
+            changed = False
             for job in self.jobs.values():
                 if job.status in {"downloading", "transcribing"}:
+                    job.checkpoint = job.status
                     job.status = "interrupted"
                     job.progress = "หยุดระหว่างการรีสตาร์ต — กดเริ่มใหม่"
+                    job.updated_at = utc_now()
+                    changed = True
+            if changed:
+                self._save()
         except (OSError, ValueError, TypeError, KeyError):
             self.jobs = {}
 
@@ -199,14 +209,23 @@ class JobStore:
 class Worker:
     def __init__(self, store: JobStore):
         self.store = store
-        self.queue: list[str] = []
+        self.queue: list[str] = [job.id for job in store.all() if job.status == "queued"]
+        self.enqueued: set[str] = set(self.queue)
+        self.current_job_id: str | None = None
         self.condition = threading.Condition()
         threading.Thread(target=self._loop, daemon=True, name="meeting-worker").start()
 
     def submit(self, job: Job) -> None:
         with self.condition:
+            if job.status != "queued" or job.id in self.enqueued or job.id == self.current_job_id:
+                return
             self.queue.append(job.id)
+            self.enqueued.add(job.id)
             self.condition.notify()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.condition:
+            return {"alive": True, "queue_depth": len(self.queue), "current_job": self.current_job_id}
 
     def _loop(self) -> None:
         while True:
@@ -214,9 +233,15 @@ class Worker:
                 while not self.queue:
                     self.condition.wait()
                 job_id = self.queue.pop(0)
+                self.enqueued.discard(job_id)
+                self.current_job_id = job_id
             job = self.store.jobs.get(job_id)
-            if job:
-                self._run(job)
+            try:
+                if job and job.status == "queued":
+                    self._run(job)
+            finally:
+                with self.condition:
+                    self.current_job_id = None
 
     def _run(self, job: Job) -> None:
         directory = Path(job.output_dir)
@@ -226,7 +251,7 @@ class Worker:
                 if not audio_path.is_file():
                     raise RuntimeError("ไม่พบไฟล์ที่อัปโหลด")
             else:
-                self.store.update(job, status="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
+                self.store.update(job, status="downloading", checkpoint="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
                 if job.media_mode == "video":
                     self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")
                     command = build_video_command(job.url, directory, job.title)
@@ -263,12 +288,12 @@ class Worker:
             if job.transcribe:
                 self._transcribe(job, audio_path)
             files = [p.name for p in directory.iterdir() if p.is_file()]
-            self.store.update(job, status="completed", progress="เสร็จสมบูรณ์", files=sorted(files))
+            self.store.update(job, status="completed", checkpoint="completed", progress="เสร็จสมบูรณ์", files=sorted(files))
         except Exception as exc:  # worker boundary: retain error for UI
             self.store.update(job, status="failed", progress="งานล้มเหลว", error=str(exc))
 
     def _transcribe(self, job: Job, audio_path: Path) -> None:
-        self.store.update(job, status="transcribing", progress="กำลังโหลดโมเดล Whisper")
+        self.store.update(job, status="transcribing", checkpoint="transcribing", progress="กำลังโหลดโมเดล Whisper")
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:

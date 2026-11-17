@@ -8,6 +8,6 @@ import uvicorn
 
 ROOT = Path(__file__).resolve().parent
 os.chdir(ROOT)
-os.environ.setdefault("MEETING_REQUIRE_ACCESS", "0")
+os.environ.setdefault("MEETING_DEPLOYMENT_MODE", "tailnet")
 uvicorn.run("app.main:app", host="127.0.0.1", port=8765, log_level="info")
 

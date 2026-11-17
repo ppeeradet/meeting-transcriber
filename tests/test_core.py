@@ -1,13 +1,27 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
-from app.core import JobStore, build_download_command, build_video_command, safe_name, srt_timestamp
+from app.core import JobStore, Worker, build_download_command, build_video_command, safe_name, srt_timestamp
+
+
+class RecordingWorker(Worker):
+    def __init__(self, store):
+        self.ran = threading.Event()
+        self.ran_job = None
+        super().__init__(store)
+
+    def _run(self, job):
+        self.ran_job = job.id
+        self.store.update(job, status="completed", checkpoint="completed")
+        self.ran.set()
 
 
 class CoreTests(unittest.TestCase):
     def test_safe_name_removes_windows_invalid_chars(self):
         self.assertEqual(safe_name('  ประชุม: ทีม/ขาย?  '), 'ประชุม_ ทีม_ขาย_')
+        self.assertEqual(safe_name('CON.mp3'), '_CON.mp3')
 
     def test_timestamp(self):
         self.assertEqual(srt_timestamp(3661.234), '01:01:01,234')
@@ -30,6 +44,27 @@ class CoreTests(unittest.TestCase):
             job = store.add('https://example.com/video', 'demo', False, 'th')
             loaded = JobStore(Path(temp))
             self.assertEqual(loaded.jobs[job.id].title, 'demo')
+
+    def test_worker_recovers_queued_job_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            first = JobStore(Path(temp))
+            job = first.add('https://youtu.be/demo', 'demo', False, 'th')
+            loaded = JobStore(Path(temp))
+            worker = RecordingWorker(loaded)
+            self.assertTrue(worker.ran.wait(2))
+            self.assertEqual(worker.ran_job, job.id)
+            worker.submit(loaded.jobs[job.id])
+            self.assertEqual(worker.snapshot()["queue_depth"], 0)
+
+    def test_interrupted_transition_is_persisted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            job = store.add('https://youtu.be/demo', 'demo', False, 'th')
+            store.update(job, status='downloading', checkpoint='downloading')
+            recovered = JobStore(Path(temp))
+            self.assertEqual(recovered.jobs[job.id].status, 'interrupted')
+            reloaded = JobStore(Path(temp))
+            self.assertEqual(reloaded.jobs[job.id].status, 'interrupted')
 
     def test_local_upload_job_has_safe_target(self):
         with tempfile.TemporaryDirectory() as temp:

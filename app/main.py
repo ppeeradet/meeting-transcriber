@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
+from importlib import metadata, util
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .core import JobStore, Worker
+from .security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_request_context
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,21 +24,26 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 if not TOKEN_PATH.exists():
     TOKEN_PATH.write_text(secrets.token_urlsafe(32), encoding="utf-8")
 ACCESS_TOKEN = os.environ.get("MEETING_TRANSCRIBER_TOKEN", TOKEN_PATH.read_text(encoding="utf-8").strip())
-REQUIRE_ACCESS = os.environ.get("MEETING_REQUIRE_ACCESS", "1").strip().lower() not in {"0", "false", "no"}
+DEPLOYMENT_MODE = os.environ.get("MEETING_DEPLOYMENT_MODE", "token").strip().lower()
+PUBLIC_ORIGIN = os.environ.get("MEETING_PUBLIC_ORIGIN", "https://dell-pc.tail187694.ts.net")
 store = JobStore(DATA_DIR)
 worker = Worker(store)
-app = FastAPI(title="Meeting Transcriber", version="1.0.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://ppeeradet.github.io", "https://dell-pc.tail187694.ts.net"],
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Personal Media Hub", version="2.0.0-dev")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
 def require_access(request: Request) -> None:
-    if not REQUIRE_ACCESS:
+    try:
+        validate_request_context(
+            DEPLOYMENT_MODE,
+            request.client.host if request.client else "",
+            request.headers.get("host", ""),
+            request.headers.get("origin"),
+            PUBLIC_ORIGIN,
+        )
+    except UnsafeRequest as exc:
+        raise HTTPException(403, str(exc)) from exc
+    if DEPLOYMENT_MODE == "tailnet":
         return
     supplied = request.headers.get("authorization", "")
     expected = f"Bearer {ACCESS_TOKEN}"
@@ -61,8 +69,34 @@ def index() -> FileResponse:
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": "meeting-transcriber", "version": "1.0.0"}
+def health() -> dict[str, Any]:
+    ffmpeg = False
+    try:
+        import imageio_ffmpeg
+
+        ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe()).is_file()
+    except (ImportError, RuntimeError):
+        pass
+    dependencies = {
+        "ffmpeg": ffmpeg,
+        "ffprobe": shutil.which("ffprobe") is not None,
+        "yt_dlp": util.find_spec("yt_dlp") is not None,
+        "whisper": util.find_spec("faster_whisper") is not None,
+        "javascript_runtime": shutil.which("node") is not None,
+    }
+    disk = shutil.disk_usage(DATA_DIR)
+    queue = worker.snapshot()
+    return {
+        "status": "ok" if all(dependencies.values()) else "degraded",
+        "backend": True,
+        "worker": queue["alive"],
+        "dependencies": dependencies,
+        "free_disk_bytes": disk.free,
+        "queue_depth": queue["queue_depth"],
+        "current_job": queue["current_job"],
+        "version": app.version,
+        "yt_dlp_version": metadata.version("yt-dlp") if dependencies["yt_dlp"] else None,
+    }
 
 
 @app.get("/api/jobs", dependencies=[Depends(require_access)])
@@ -72,12 +106,14 @@ def jobs() -> list[dict]:
 
 @app.post("/api/jobs", status_code=202, dependencies=[Depends(require_access)])
 def create_jobs(request: CreateJobs) -> list[dict]:
+    direct_hosts = {item.strip() for item in os.environ.get("MEETING_DIRECT_MEDIA_HOSTS", "").split(",") if item.strip()}
+    try:
+        urls = validate_batch(request.urls, direct_hosts=direct_hosts)
+    except UnsafeMediaURL as exc:
+        raise HTTPException(400, str(exc)) from exc
     created = []
-    for index, raw_url in enumerate(request.urls, 1):
-        url = raw_url.strip()
-        if not url.startswith(("https://", "http://")):
-            raise HTTPException(400, f"URL ลำดับที่ {index} ไม่ถูกต้อง")
-        title = request.title if len(request.urls) == 1 else None
+    for url in urls:
+        title = request.title if len(urls) == 1 else None
         job = store.add(url, title, request.transcribe, request.language, request.media_mode)
         worker.submit(job)
         created.append(asdict(job))
