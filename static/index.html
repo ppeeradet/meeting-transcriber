@@ -13,7 +13,7 @@
       <label>รหัสเข้าถึง<input id="token" type="password" placeholder="วางรหัสครั้งแรก ระบบจำไว้ในเบราว์เซอร์นี้"></label>
       <label>URL วิดีโอ <small>ใส่บรรทัดละหนึ่งรายการ</small></label>
       <textarea id="urls" rows="5" placeholder="https://youtu.be/xmyqhV0f9Go"></textarea>
-      <div class="grid"><label>ชื่อไฟล์ (เมื่อมี URL เดียว)<input id="title" placeholder="ประชุมทีม 17 พฤศจิกายน"></label><label>ภาษา<select id="language"><option value="th">ไทย</option><option value="en">English</option><option value="auto">ตรวจอัตโนมัติ</option></select></label></div>
+      <div class="grid"><label>ชื่อไฟล์ (เมื่อมี URL เดียว)<input id="title" placeholder="ประชุมทีม 17 พฤศจิกายน"></label><label>ประเภทไฟล์<select id="media-mode"><option value="audio">เสียงต้นฉบับ + MP3</option><option value="video">วิดีโอ + เสียงคุณภาพสูงสุด</option></select></label><label>ภาษา<select id="language"><option value="th">ไทย</option><option value="en">English</option><option value="auto">ตรวจอัตโนมัติ</option></select></label></div>
       <label class="check"><input id="transcribe" type="checkbox"> ถอดเสียงด้วย Whisper หลังดาวน์โหลด</label>
       <button id="submit">เริ่มงาน</button><span id="message"></span>
       <hr>

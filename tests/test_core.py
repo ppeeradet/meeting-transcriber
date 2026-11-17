@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.core import JobStore, build_download_command, safe_name, srt_timestamp
+from app.core import JobStore, build_download_command, build_video_command, safe_name, srt_timestamp
 
 
 class CoreTests(unittest.TestCase):
@@ -17,6 +17,12 @@ class CoreTests(unittest.TestCase):
         self.assertIn('-k', command)
         self.assertIn('--embed-thumbnail', command)
         self.assertEqual(command[-1], 'https://example.com/video')
+
+    def test_video_command_uses_best_video_and_audio(self):
+        command = build_video_command('https://example.com/video', Path('out'), 'คลิปเต็ม')
+        self.assertIn('bv*+ba/b', command)
+        self.assertIn('--merge-output-format', command)
+        self.assertIn('mp4', command)
 
     def test_store_round_trip(self):
         with tempfile.TemporaryDirectory() as temp:
