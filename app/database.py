@@ -157,4 +157,3 @@ class JobDatabase:
         with self.session() as connection:
             rows = connection.execute("SELECT payload FROM jobs ORDER BY created_at").fetchall()
         return [json.loads(row["payload"]) for row in rows]
-
