@@ -21,6 +21,7 @@ from .core import JobStore, Worker
 from .media import MediaValidationError, probe_media
 from .security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_bearer_token, validate_request_context
 from .services.downloader import DownloadOptions, preview
+from .services.converter import ConversionOptions
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -192,6 +193,52 @@ async def upload_media(
         except MediaValidationError as exc:
             raise HTTPException(415, str(exc)) from exc
         job = store.add_local_file(target, filename, title, language)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+    worker.submit(job)
+    return asdict(job)
+
+
+@app.post("/api/conversions", status_code=202, dependencies=[Depends(require_access)])
+async def convert_media(
+    file: UploadFile = File(...),
+    output_format: str = Form(...),
+    bitrate: str = Form(default="192"),
+    resolution: str = Form(default="original"),
+    title: str | None = Form(default=None),
+) -> dict:
+    try:
+        ConversionOptions(output_format, bitrate, resolution).validate()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    filename = file.filename or "upload"
+    if Path(filename).suffix.lower() not in ALLOWED_UPLOADS:
+        raise HTTPException(415, "ชนิดไฟล์ต้นทางไม่รองรับ")
+    upload_root = DATA_DIR / "uploads"
+    upload_root.mkdir(parents=True, exist_ok=True)
+    target = upload_root / f"{uuid.uuid4().hex}.part"
+    size = 0
+    try:
+        if shutil.disk_usage(DATA_DIR).free <= MIN_FREE_RESERVE_BYTES:
+            raise HTTPException(507, "พื้นที่ดิสก์เหลือน้อยเกินไป")
+        with target.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "ไฟล์ใหญ่เกิน 4 GB")
+                if shutil.disk_usage(DATA_DIR).free <= MIN_FREE_RESERVE_BYTES:
+                    raise HTTPException(507, "พื้นที่ดิสก์ไม่เพียงพอสำหรับไฟล์นี้")
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "ไม่รับไฟล์ว่าง")
+        try:
+            probe_media(target)
+        except MediaValidationError as exc:
+            raise HTTPException(415, str(exc)) from exc
+        job = store.add_local_file(target, filename, title, "auto", "convert", output_format, bitrate, resolution)
     except Exception:
         target.unlink(missing_ok=True)
         raise

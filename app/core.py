@@ -73,6 +73,9 @@ class Job:
     output_format: str = "mp3"
     quality: str = "v0"
     embed_cover: bool = True
+    operation: str = "download"
+    conversion_bitrate: str = "192"
+    conversion_resolution: str = "original"
 
 
 class JobCancelled(RuntimeError):
@@ -98,7 +101,7 @@ class JobStore:
             self.jobs = {item["id"]: Job(**item) for item in payload}
             changed = False
             for job in self.jobs.values():
-                if job.status in {"downloading", "transcribing"}:
+                if job.status in {"downloading", "converting", "transcribing", "exporting"}:
                     job.checkpoint = job.status
                     job.status = "interrupted"
                     job.progress = "หยุดระหว่างการรีสตาร์ต — กดเริ่มใหม่"
@@ -157,7 +160,7 @@ class JobStore:
             self._save()
         return job
 
-    def add_local_file(self, source: Path, filename: str, title: str | None, language: str) -> Job:
+    def add_local_file(self, source: Path, filename: str, title: str | None, language: str, operation: str = "transcribe", output_format: str = "mp3", bitrate: str = "192", resolution: str = "original") -> Job:
         job_id = uuid.uuid4().hex[:12]
         directory = self.jobs_root / job_id
         directory.mkdir(parents=True)
@@ -169,10 +172,14 @@ class JobStore:
                 url=f"local://{target.name}",
                 input_path=str(target),
                 title=title or Path(filename).stem,
-                transcribe=True,
+                transcribe=operation == "transcribe",
                 language=language,
                 output_dir=str(directory),
                 checkpoint="uploaded",
+                operation=operation,
+                output_format=output_format,
+                conversion_bitrate=bitrate,
+                conversion_resolution=resolution,
             )
             with self.lock:
                 self.jobs[job.id] = job
@@ -293,6 +300,11 @@ class Worker:
                 audio_path = Path(job.input_path)
                 if not audio_path.is_file():
                     raise RuntimeError("ไม่พบไฟล์ที่อัปโหลด")
+                if job.operation == "convert":
+                    self._convert(job, audio_path)
+                    files = [p.name for p in directory.iterdir() if p.is_file()]
+                    self.store.update(job, status="completed", checkpoint="completed", progress="แปลงไฟล์เสร็จสมบูรณ์", files=sorted(files))
+                    return
             else:
                 audio_path = self._existing_media(job, directory) if job.checkpoint in {"downloaded", "transcribing"} else None
                 if audio_path is None:
@@ -350,6 +362,40 @@ class Worker:
             self.store.update(job, status="cancelled", progress="ยกเลิกแล้ว", error=None)
         except Exception as exc:  # worker boundary: retain error for UI
             self.store.update(job, status="failed", progress="งานล้มเหลว", error=str(exc))
+
+    def _convert(self, job: Job, source: Path) -> None:
+        from .services.converter import ConversionOptions, build_conversion_command, output_path
+
+        options = ConversionOptions(job.output_format, job.conversion_bitrate, job.conversion_resolution)
+        target = output_path(source, Path(job.output_dir), job.output_format)
+        self.store.update(job, status="converting", checkpoint="converting", progress="กำลังแปลงไฟล์", error=None)
+        process = subprocess.Popen(
+            build_conversion_command(source, target, options),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        with self.condition:
+            self.current_process = process
+        log_path = Path(job.output_dir) / "conversion.log"
+        assert process.stdout is not None
+        with log_path.open("w", encoding="utf-8") as log:
+            for line in process.stdout:
+                if self._cancelled(job):
+                    process.terminate()
+                    target.unlink(missing_ok=True)
+                    raise JobCancelled()
+                log.write(line)
+        if process.wait() != 0:
+            target.unlink(missing_ok=True)
+            raise RuntimeError("แปลงไฟล์ไม่สำเร็จ กรุณาดู conversion.log")
+        if not target.is_file() or target.stat().st_size == 0:
+            target.unlink(missing_ok=True)
+            raise RuntimeError("ไม่พบไฟล์ผลลัพธ์หลังแปลง")
+        self.store.update(job, checkpoint="converted", progress="แปลงไฟล์แล้ว")
 
     def _transcribe(self, job: Job, audio_path: Path) -> None:
         self.store.update(job, status="transcribing", checkpoint="transcribing", progress="กำลังโหลดโมเดล Whisper")
