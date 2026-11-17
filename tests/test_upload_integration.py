@@ -1,4 +1,3 @@
-import os
 import shutil
 import tempfile
 import unittest
@@ -6,15 +5,9 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from app.core import JobStore
 
-TEST_ROOT = Path(tempfile.mkdtemp(prefix="media-hub-upload-test-"))
-os.environ["MEETING_TRANSCRIBER_DATA"] = str(TEST_ROOT)
-
-from app import main as main_module  # noqa: E402
-
-
-def tearDownModule():
-    shutil.rmtree(TEST_ROOT, ignore_errors=True)
+from app import main as main_module
 
 
 class FakeUpload:
@@ -43,16 +36,22 @@ def run_immediate(coroutine):
 
 class UploadIntegrationTests(unittest.TestCase):
     def setUp(self):
+        self.test_root = Path(tempfile.mkdtemp(prefix="media-hub-upload-test-"))
+        self.original_store = main_module.store
         self.original_probe = main_module.probe_media
         self.original_submit = main_module.worker.submit
+        main_module.store = JobStore(self.test_root)
         main_module.probe_media = lambda path: {"has_audio": True, "has_video": False, "duration": 1.0}
         main_module.worker.submit = lambda job: None
 
     def tearDown(self):
+        main_module.store = self.original_store
         main_module.probe_media = self.original_probe
         main_module.worker.submit = self.original_submit
+        shutil.rmtree(self.test_root, ignore_errors=True)
 
     def test_upload_creates_job_only_after_complete_file(self):
+        self.assertEqual(main_module.store.root.resolve(), self.test_root.resolve())
         upload = FakeUpload(b"valid-media", "เสียงประชุม.mp3")
         payload = run_immediate(main_module.upload_media(upload, title="ประชุม", language="th", model_profile="balanced"))
         target = Path(payload["input_path"])
