@@ -90,6 +90,12 @@ class TranscriptUpdate(BaseModel):
     segments: list[TranscriptSegment] = Field(max_length=100_000)
 
 
+class LibraryTranscription(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    language: str = Field(default="th", pattern="^(th|en|auto)$")
+    model_profile: str = Field(default="balanced", pattern="^(fast|balanced|high)$")
+
+
 ALLOWED_UPLOADS = {".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mov", ".mkv", ".aac", ".flac", ".ogg", ".opus", ".mpeg", ".mpg"}
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 MIN_FREE_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
@@ -333,6 +339,24 @@ def retry_job(job_id: str) -> dict:
         raise HTTPException(404, "ไม่พบงาน")
     if not worker.retry(job):
         raise HTTPException(409, "งานสถานะนี้ไม่สามารถลองใหม่ได้")
+    return asdict(job)
+
+
+@app.post("/api/jobs/{job_id}/transcribe", status_code=202, dependencies=[Depends(require_access)])
+def transcribe_library_file(job_id: str, request: LibraryTranscription) -> dict:
+    source_job = store.jobs.get(job_id)
+    if not source_job:
+        raise HTTPException(404, "ไม่พบงานต้นทาง")
+    source_root = Path(source_job.output_dir).resolve()
+    source = (source_root / request.filename).resolve()
+    if source.parent != source_root or source.suffix.lower() not in ALLOWED_UPLOADS or not source.is_file():
+        raise HTTPException(404, "ไม่พบไฟล์สื่อที่เลือก")
+    try:
+        probe_media(source)
+        job = store.add_existing_file(source, source_job.title or source.stem, request.language, request.model_profile)
+    except (MediaValidationError, ValueError) as exc:
+        raise HTTPException(415, str(exc)) from exc
+    worker.submit(job)
     return asdict(job)
 
 

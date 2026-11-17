@@ -19,6 +19,7 @@
 }
 
 .dashboard-stats span { color: #efbdb5; }
+.media-sizes { color: #ffd59d; font-size: .9rem; }
 
 .library-filters {
   display: grid;

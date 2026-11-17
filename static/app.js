@@ -16,6 +16,14 @@ function progressInfo(job) {
   return { value, label: `${Math.round(value)}%` };
 }
 
+function formatBytes(value) {
+  if (!Number.isFinite(value)) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value; let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+  return `${size.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
 function renderJobs(jobs) {
   jobsById.clear();
   jobs.forEach((job) => jobsById.set(job.id, job));
@@ -26,9 +34,14 @@ function renderJobs(jobs) {
     const bar = info.value === null ? '<em class="indeterminate"></em>' : `<em style="width:${info.value}%"></em>`;
     const retry = ["failed", "interrupted", "cancelled"].includes(job.status) ? `<button class="ghost retry" data-job="${esc(job.id)}">ลองใหม่</button>` : "";
     const cancel = ["queued", "downloading", "converting", "transcribing"].includes(job.status) ? `<button class="ghost cancel-job" data-job="${esc(job.id)}">ยกเลิกงาน</button>` : "";
-    const files = job.files.map((file) => `<button class="ghost file" data-job="${esc(job.id)}" data-file="${esc(file)}">ดาวน์โหลด ${esc(file)}</button>`).join("");
+    const files = job.files.map((file) => {
+      const transcribe = /\.(mp3|mp4|m4a|wav|webm|mov|mkv|aac|flac|ogg|opus|mpeg|mpg)$/i.test(file)
+        ? `<button class="ghost transcribe-file" data-job="${esc(job.id)}" data-file="${esc(file)}">ถอดเสียงไฟล์นี้</button>` : "";
+      return `<button class="ghost file" data-job="${esc(job.id)}" data-file="${esc(file)}">ดาวน์โหลด ${esc(file)}</button>${transcribe}`;
+    }).join("");
     const edit = job.files.includes("transcript.json") ? `<button class="ghost edit-transcript" data-job="${esc(job.id)}">แก้ไขถอดเสียง</button>` : "";
-    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><span class="status">${esc(job.status)}</span></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p><div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}</div></article>`;
+    const sizes = job.source_size_bytes ? `<p class="media-sizes">ต้นฉบับ ${formatBytes(job.source_size_bytes)}${job.result_size_bytes ? ` · ผลลัพธ์ ${formatBytes(job.result_size_bytes)}` : ""}</p>` : "";
+    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><span class="status">${esc(job.status)}</span></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p>${sizes}<div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}</div></article>`;
   }).join("");
 }
 
@@ -157,6 +170,18 @@ document.querySelector("#editor-close").onclick = () => { document.querySelector
 jobsEl.onclick = async (event) => {
   const editButton = event.target.closest(".edit-transcript");
   if (editButton) { await openTranscript(jobsById.get(editButton.dataset.job)); return; }
+  const transcribeButton = event.target.closest(".transcribe-file");
+  if (transcribeButton) {
+    transcribeButton.disabled = true;
+    transcribeButton.textContent = "กำลังเพิ่มเข้าคิว…";
+    const response = await fetch(`${base}/api/jobs/${encodeURIComponent(transcribeButton.dataset.job)}/transcribe`, {
+      method: "POST", headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ filename: transcribeButton.dataset.file, language: document.querySelector("#language").value, model_profile: document.querySelector("#model-profile").value }),
+    });
+    if (!response.ok) alert(await response.text());
+    await load();
+    return;
+  }
   const fileButton = event.target.closest(".file");
   if (fileButton) {
     const url = `${base}/api/jobs/${encodeURIComponent(fileButton.dataset.job)}/files/${encodeURIComponent(fileButton.dataset.file)}`;

@@ -135,6 +135,19 @@ class CoreTests(unittest.TestCase):
         self.assertEqual([item[0] for item in created], ["small", "medium", "large-v3"])
         self.assertTrue(all(item[1]["compute_type"] == "int8" for item in created))
 
+    def test_library_file_is_linked_for_transcription_without_copying(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            source_job = store.add("https://youtu.be/demo", "ประชุม", False, "th")
+            source = Path(source_job.output_dir) / "converted.mp3"
+            source.write_bytes(b"existing-media")
+            linked = store.add_existing_file(source, "ประชุม", "th", "fast")
+            self.assertEqual(Path(linked.input_path), source.resolve())
+            self.assertTrue(source.is_file())
+            self.assertNotEqual(Path(linked.output_dir), source.parent)
+            self.assertEqual(linked.source_size_bytes, len(b"existing-media"))
+            self.assertEqual(linked.model_profile, "fast")
+
 
 if __name__ == '__main__':
     unittest.main()

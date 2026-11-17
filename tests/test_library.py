@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from app.core import JobStore
 from app import main as main_module
+from fastapi import HTTPException
 
 
 class MediaLibraryTests(unittest.TestCase):
@@ -19,6 +20,28 @@ class MediaLibraryTests(unittest.TestCase):
                 self.assertEqual([item["id"] for item in main_module.jobs(status="failed")], [second.id])
                 self.assertEqual(main_module.jobs(platform="YouTube")[0]["platform"], "YouTube")
                 self.assertEqual(main_module.jobs(media_type="video")[0]["id"], second.id)
+
+    def test_library_media_can_be_sent_to_transcriber_without_download(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            source_job = store.add("https://youtu.be/demo", "ประชุม", False, "th")
+            media = Path(source_job.output_dir) / "result.mp3"
+            media.write_bytes(b"media")
+            request = main_module.LibraryTranscription(filename="result.mp3", language="th", model_profile="fast")
+            with patch.object(main_module, "store", store), patch.object(main_module, "probe_media", return_value={"has_audio": True}), patch.object(main_module.worker, "submit") as submit:
+                result = main_module.transcribe_library_file(source_job.id, request)
+            self.assertEqual(Path(result["input_path"]), media.resolve())
+            self.assertEqual(result["model_profile"], "fast")
+            submit.assert_called_once()
+
+    def test_library_transcription_rejects_path_traversal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            source_job = store.add("https://youtu.be/demo", "ประชุม", False, "th")
+            request = main_module.LibraryTranscription(filename="../outside.mp3", language="th", model_profile="fast")
+            with patch.object(main_module, "store", store), self.assertRaises(HTTPException) as caught:
+                main_module.transcribe_library_file(source_job.id, request)
+            self.assertEqual(caught.exception.status_code, 404)
 
 
 if __name__ == "__main__":

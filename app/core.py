@@ -79,6 +79,8 @@ class Job:
     conversion_bitrate: str = "192"
     conversion_resolution: str = "original"
     model_profile: str = "balanced"
+    source_size_bytes: int | None = None
+    result_size_bytes: int | None = None
 
 
 class JobCancelled(RuntimeError):
@@ -186,6 +188,7 @@ class JobStore:
                 conversion_bitrate=bitrate,
                 conversion_resolution=resolution,
                 model_profile=model_profile,
+                source_size_bytes=target.stat().st_size,
             )
             with self.lock:
                 self.jobs[job.id] = job
@@ -195,6 +198,31 @@ class JobStore:
             target.unlink(missing_ok=True)
             directory.rmdir()
             raise
+
+    def add_existing_file(self, source: Path, title: str | None, language: str, model_profile: str = "balanced") -> Job:
+        source = source.resolve()
+        if not source.is_file() or source.stat().st_size == 0:
+            raise ValueError("ไม่พบไฟล์สื่อที่เลือก")
+        job_id = uuid.uuid4().hex[:12]
+        directory = self.jobs_root / job_id
+        directory.mkdir(parents=True)
+        job = Job(
+            id=job_id,
+            url=f"library://{source.name}",
+            input_path=str(source),
+            title=title or source.stem,
+            transcribe=True,
+            language=language,
+            output_dir=str(directory),
+            checkpoint="linked",
+            operation="transcribe",
+            model_profile=model_profile,
+            source_size_bytes=source.stat().st_size,
+        )
+        with self.lock:
+            self.jobs[job.id] = job
+            self._save()
+        return job
 
     def update(self, job: Job, **changes: Any) -> None:
         with self.lock:
@@ -404,7 +432,7 @@ class Worker:
         if not target.is_file() or target.stat().st_size == 0:
             target.unlink(missing_ok=True)
             raise RuntimeError("ไม่พบไฟล์ผลลัพธ์หลังแปลง")
-        self.store.update(job, checkpoint="converted", progress="แปลงไฟล์แล้ว")
+        self.store.update(job, checkpoint="converted", progress="แปลงไฟล์แล้ว", result_size_bytes=target.stat().st_size)
 
     def _transcribe(self, job: Job, audio_path: Path) -> None:
         self.store.update(job, status="transcribing", checkpoint="transcribing", progress="กำลังโหลดโมเดล Whisper")
