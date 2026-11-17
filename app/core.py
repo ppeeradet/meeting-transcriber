@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -35,6 +36,10 @@ def srt_timestamp(seconds: float) -> str:
     minutes, remainder = divmod(remainder, 60_000)
     secs, millis = divmod(remainder, 1000)
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+
+
+def transcription_language(value: str) -> str | None:
+    return None if value.strip().lower() == "auto" else value.strip().lower()
 
 
 def build_download_command(url: str, output_dir: Path, title: str | None) -> list[str]:
@@ -245,6 +250,7 @@ class Worker:
         self.current_job_id: str | None = None
         self.current_process: subprocess.Popen[str] | None = None
         self.cancel_events: dict[str, threading.Event] = {}
+        self.whisper_models: dict[str, Any] = {}
         self.condition = threading.Condition()
         threading.Thread(target=self._loop, daemon=True, name="meeting-worker").start()
 
@@ -311,6 +317,20 @@ class Worker:
                     return path
         return None
 
+    def _whisper_model(self) -> Any:
+        model_name = os.environ.get("MEETING_WHISPER_MODEL", "large-v3")
+        if model_name not in self.whisper_models:
+            from faster_whisper import WhisperModel
+
+            cpu_threads = int(os.environ.get("MEETING_WHISPER_CPU_THREADS", "4"))
+            self.whisper_models[model_name] = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=max(1, cpu_threads),
+            )
+        return self.whisper_models[model_name]
+
     def _run(self, job: Job) -> None:
         directory = Path(job.output_dir)
         try:
@@ -370,21 +390,38 @@ class Worker:
     def _transcribe(self, job: Job, audio_path: Path) -> None:
         self.store.update(job, status="transcribing", checkpoint="transcribing", progress="กำลังโหลดโมเดล Whisper")
         try:
-            from faster_whisper import WhisperModel
+            model = self._whisper_model()
         except ImportError as exc:
             raise RuntimeError("ยังไม่ได้ติดตั้ง Faster Whisper; ติดตั้ง requirements.txt ก่อน") from exc
-        model = WhisperModel("large-v3", device="cpu", compute_type="int8")
-        segments, info = model.transcribe(str(audio_path), language=job.language, vad_filter=True)
+        partial_path = Path(job.output_dir) / "transcript.partial.json"
         rows: list[dict[str, Any]] = []
+        if partial_path.is_file():
+            try:
+                rows = json.loads(partial_path.read_text(encoding="utf-8")).get("segments", [])
+            except (OSError, ValueError, TypeError):
+                rows = []
+        resume_at = float(rows[-1]["end"]) if rows else 0.0
+        segments, info = model.transcribe(
+            str(audio_path),
+            language=transcription_language(job.language),
+            vad_filter=True,
+            clip_timestamps=[resume_at] if resume_at > 0 else "0",
+        )
         txt: list[str] = []
         srt: list[str] = []
-        for index, segment in enumerate(segments, 1):
+        for row in rows:
+            txt.append(f"[{srt_timestamp(row['start']).replace(',', '.')}] {row['text']}")
+            srt.extend([str(len(srt) // 4 + 1), f"{srt_timestamp(row['start'])} --> {srt_timestamp(row['end'])}", row["text"], ""])
+        for index, segment in enumerate(segments, len(rows) + 1):
             if self._cancelled(job):
                 raise JobCancelled()
             text = segment.text.strip()
             rows.append({"start": segment.start, "end": segment.end, "text": text})
             txt.append(f"[{srt_timestamp(segment.start).replace(',', '.')}] {text}")
             srt.extend([str(index), f"{srt_timestamp(segment.start)} --> {srt_timestamp(segment.end)}", text, ""])
+            temp = partial_path.with_suffix(".tmp")
+            temp.write_text(json.dumps({"segments": rows}, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp.replace(partial_path)
             if index % 10 == 0:
                 self.store.update(job, progress=f"ถอดเสียงแล้ว {index} ช่วง")
         audio_path.with_name("transcript.txt").write_text("\n".join(txt), encoding="utf-8")
@@ -394,6 +431,7 @@ class Worker:
             encoding="utf-8",
         )
         self._write_word_documents(job, rows)
+        partial_path.unlink(missing_ok=True)
 
     def _write_word_documents(self, job: Job, rows: list[dict[str, Any]]) -> None:
         from docx import Document

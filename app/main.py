@@ -4,7 +4,8 @@ import os
 import secrets
 import shutil
 import uuid
-from importlib import metadata, util
+import importlib
+from importlib import metadata
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .core import JobStore, Worker
 from .media import MediaValidationError, probe_media
@@ -31,6 +33,10 @@ PUBLIC_ORIGIN = os.environ.get("MEETING_PUBLIC_ORIGIN", "https://dell-pc.tail187
 store = JobStore(DATA_DIR)
 worker = Worker(store)
 app = FastAPI(title="Personal Media Hub", version="2.0.0-dev")
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["127.0.0.1", "localhost", "dell-pc.tail187694.ts.net", "testserver"],
+)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
@@ -80,11 +86,18 @@ def health() -> dict[str, Any]:
         ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe()).is_file()
     except (ImportError, RuntimeError):
         pass
+    def import_ready(module: str) -> bool:
+        try:
+            importlib.import_module(module)
+            return True
+        except Exception:
+            return False
+
     dependencies = {
         "ffmpeg": ffmpeg,
         "ffprobe": bool((probe := os.environ.get("MEETING_FFPROBE") or shutil.which("ffprobe")) and Path(probe).is_file()),
-        "yt_dlp": util.find_spec("yt_dlp") is not None,
-        "whisper": util.find_spec("faster_whisper") is not None,
+        "yt_dlp": import_ready("yt_dlp"),
+        "whisper": import_ready("faster_whisper"),
         "javascript_runtime": shutil.which("node") is not None,
     }
     disk = shutil.disk_usage(DATA_DIR)
