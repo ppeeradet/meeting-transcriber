@@ -3,7 +3,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from app.core import JobStore, Worker, build_download_command, build_video_command, safe_name, srt_timestamp
+from app.core import JobStore, Worker, build_download_command, build_video_command, safe_name, srt_timestamp, transcription_language
 
 
 class RecordingWorker(Worker):
@@ -36,6 +36,8 @@ class CoreTests(unittest.TestCase):
 
     def test_timestamp(self):
         self.assertEqual(srt_timestamp(3661.234), '01:01:01,234')
+        self.assertIsNone(transcription_language('auto'))
+        self.assertEqual(transcription_language('TH'), 'th')
 
     def test_download_command_keeps_original_and_cover(self):
         command = build_download_command('https://example.com/video', Path('out'), 'ชื่อประชุม')
