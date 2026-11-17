@@ -82,7 +82,7 @@ def health() -> dict[str, Any]:
         pass
     dependencies = {
         "ffmpeg": ffmpeg,
-        "ffprobe": shutil.which("ffprobe") is not None,
+        "ffprobe": bool((probe := os.environ.get("MEETING_FFPROBE") or shutil.which("ffprobe")) and Path(probe).is_file()),
         "yt_dlp": util.find_spec("yt_dlp") is not None,
         "whisper": util.find_spec("faster_whisper") is not None,
         "javascript_runtime": shutil.which("node") is not None,
