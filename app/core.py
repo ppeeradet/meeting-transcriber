@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -43,74 +42,15 @@ def transcription_language(value: str) -> str | None:
 
 
 def build_download_command(url: str, output_dir: Path, title: str | None) -> list[str]:
-    template = f"{safe_name(title)}.%(ext)s" if title else "%(title).120B.%(ext)s"
-    command = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        "--ignore-config",
-        "--no-playlist",
-        "--socket-timeout",
-        "30",
-        "--newline",
-        "-f",
-        "bestaudio/best",
-        "-x",
-        "-k",
-        "--audio-format",
-        "mp3",
-        "--audio-quality",
-        "0",
-        "--write-thumbnail",
-        "--convert-thumbnails",
-        "jpg",
-        "--embed-thumbnail",
-        "--add-metadata",
-        "--windows-filenames",
-        "-o",
-        str(output_dir / template),
-    ]
-    try:
-        import imageio_ffmpeg
+    from .services.downloader import DownloadOptions, build_command
 
-        command.extend(["--ffmpeg-location", imageio_ffmpeg.get_ffmpeg_exe()])
-    except ImportError:
-        pass
-    command.append(url)
-    return command
+    return build_command(url, output_dir, title, DownloadOptions())
 
 
 def build_video_command(url: str, output_dir: Path, title: str | None) -> list[str]:
-    template = f"{safe_name(title)}.%(ext)s" if title else "%(title).120B.%(ext)s"
-    command = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        "--ignore-config",
-        "--no-playlist",
-        "--socket-timeout",
-        "30",
-        "--newline",
-        "-f",
-        "bv*+ba/b",
-        "--merge-output-format",
-        "mp4",
-        "--write-thumbnail",
-        "--convert-thumbnails",
-        "jpg",
-        "--add-metadata",
-        "--windows-filenames",
-        "-o",
-        str(output_dir / template),
-    ]
-    try:
-        import imageio_ffmpeg
+    from .services.downloader import DownloadOptions, build_command
 
-        command.extend(["--ffmpeg-location", imageio_ffmpeg.get_ffmpeg_exe()])
-    except ImportError:
-        pass
-    command.append(url)
-    return command
+    return build_command(url, output_dir, title, DownloadOptions(media_mode="video", output_format="mp4", quality="best", embed_cover=False))
 
 
 @dataclass
@@ -130,6 +70,9 @@ class Job:
     error: str | None = None
     files: list[str] = field(default_factory=list)
     checkpoint: str = "created"
+    output_format: str = "mp3"
+    quality: str = "v0"
+    embed_cover: bool = True
 
 
 class JobCancelled(RuntimeError):
@@ -174,7 +117,7 @@ class JobStore:
         )
         temp.replace(self.path)
 
-    def add(self, url: str, title: str | None, transcribe: bool, language: str, media_mode: str = "audio") -> Job:
+    def add(self, url: str, title: str | None, transcribe: bool, language: str, media_mode: str = "audio", output_format: str = "mp3", quality: str = "v0", embed_cover: bool = True) -> Job:
         job_id = uuid.uuid4().hex[:12]
         directory = self.jobs_root / job_id
         directory.mkdir(parents=True)
@@ -186,6 +129,9 @@ class JobStore:
             transcribe=transcribe,
             language=language,
             output_dir=str(directory),
+            output_format=output_format,
+            quality=quality,
+            embed_cover=embed_cover,
         )
         with self.lock:
             self.jobs[job.id] = job
@@ -360,9 +306,13 @@ class Worker:
                     self.store.update(job, status="downloading", checkpoint="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
                     if job.media_mode == "video":
                         self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")
-                        command = build_video_command(job.url, directory, job.title)
+                        from .services.downloader import DownloadOptions, build_command
+
+                        command = build_command(job.url, directory, job.title, DownloadOptions("video", job.output_format, job.quality, job.embed_cover))
                     else:
-                        command = build_download_command(job.url, directory, job.title)
+                        from .services.downloader import DownloadOptions, build_command
+
+                        command = build_command(job.url, directory, job.title, DownloadOptions("audio", job.output_format, job.quality, job.embed_cover))
                     process = subprocess.Popen(
                         command,
                         stdout=subprocess.PIPE,

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Personal Media Hub</title>
   <link rel="stylesheet" href="static/style.css">
-  <style>.job-progress .indeterminate{width:38%;animation:job-slide 1.2s ease-in-out infinite}@keyframes job-slide{from{transform:translateX(-110%)}to{transform:translateX(285%)}}</style>
+  <style>.job-progress .indeterminate{width:38%;animation:job-slide 1.2s ease-in-out infinite}@keyframes job-slide{from{transform:translateX(-110%)}to{transform:translateX(285%)}}.preview-card{display:grid;grid-template-columns:120px 1fr;gap:16px;align-items:center;margin:14px 0;padding:14px;border-radius:14px;background:#310914;border:1px solid #a83b58}.preview-card img{width:120px;max-height:90px;object-fit:cover;border-radius:10px}.preview-card h3{margin:0 0 6px}.preview-card p{margin:3px 0;color:#edbdb5}@media(max-width:650px){.preview-card{grid-template-columns:1fr}.preview-card img{width:100%;max-height:180px}}</style>
 </head>
 <body>
   <main>
@@ -14,7 +14,9 @@
       <p>ระบบสำหรับงานสำคัญบน Dell · เปิดผ่าน Home Portal และ Tailscale เท่านั้น</p>
       <label>URL วิดีโอ <small>ใส่บรรทัดละหนึ่งรายการ</small></label>
       <textarea id="urls" rows="5" placeholder="https://youtu.be/xmyqhV0f9Go"></textarea>
-      <div class="grid"><label>ชื่อไฟล์ (เมื่อมี URL เดียว)<input id="title" placeholder="ประชุมทีม 17 พฤศจิกายน"></label><label>ประเภทไฟล์<select id="media-mode"><option value="audio">เสียงต้นฉบับ + MP3</option><option value="video">วิดีโอ + เสียงคุณภาพสูงสุด</option></select></label><label>ภาษา<select id="language"><option value="th">ไทย</option><option value="en">English</option><option value="auto">ตรวจอัตโนมัติ</option></select></label></div>
+      <button class="ghost" id="preview" type="button">ตรวจสอบข้อมูลคลิป</button><div id="preview-card" class="preview-card" hidden></div>
+      <div class="grid"><label>ชื่อไฟล์ (เมื่อมี URL เดียว)<input id="title" placeholder="ประชุมทีม 17 พฤศจิกายน"></label><label>ประเภทสื่อ<select id="media-mode"><option value="audio">Audio</option><option value="video">Video</option></select></label><label>รูปแบบผลลัพธ์<select id="output-format"><option value="mp3">MP3</option><option value="original">Original Audio</option><option value="m4a">M4A</option><option value="wav">WAV</option><option value="flac">FLAC</option><option value="mp4">MP4 Video</option></select></label><label>คุณภาพ<select id="quality"><option value="v0">MP3 V0 High Quality</option><option value="320">320 kbps</option><option value="256">256 kbps</option><option value="192">192 kbps</option><option value="128">128 kbps</option><option value="best">Best Available</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p</option></select></label><label>ภาษา<select id="language"><option value="th">ไทย</option><option value="en">English</option><option value="auto">ตรวจอัตโนมัติ</option></select></label></div>
+      <label class="check"><input id="embed-cover" type="checkbox" checked> ฝังภาพปกในไฟล์เสียงที่รองรับ</label>
       <label class="check"><input id="transcribe" type="checkbox"> ถอดเสียงด้วย Whisper หลังดาวน์โหลด</label>
       <button id="submit">เริ่มงาน</button><span id="message"></span>
       <hr>

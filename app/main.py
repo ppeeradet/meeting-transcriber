@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import subprocess
 import uuid
 import importlib
 from importlib import metadata
@@ -19,6 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .core import JobStore, Worker
 from .media import MediaValidationError, probe_media
 from .security import UnsafeMediaURL, UnsafeRequest, validate_batch, validate_bearer_token, validate_request_context
+from .services.downloader import DownloadOptions, preview
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -65,6 +67,13 @@ class CreateJobs(BaseModel):
     transcribe: bool = False
     language: str = Field(default="th", max_length=10)
     media_mode: str = Field(default="audio", pattern="^(audio|video)$")
+    output_format: str = Field(default="mp3", pattern="^(original|mp3|m4a|wav|flac|mp4)$")
+    quality: str = Field(default="v0", pattern="^(v0|320|256|192|128|best|1080|720|480|360)$")
+    embed_cover: bool = True
+
+
+class PreviewRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
 
 
 ALLOWED_UPLOADS = {".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mov", ".mkv", ".aac", ".flac", ".ogg", ".opus", ".mpeg", ".mpg"}
@@ -127,13 +136,29 @@ def create_jobs(request: CreateJobs) -> list[dict]:
         urls = validate_batch(request.urls, direct_hosts=direct_hosts)
     except UnsafeMediaURL as exc:
         raise HTTPException(400, str(exc)) from exc
+    try:
+        DownloadOptions(request.media_mode, request.output_format, request.quality, request.embed_cover).validate()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     created = []
     for url in urls:
         title = request.title if len(urls) == 1 else None
-        job = store.add(url, title, request.transcribe, request.language, request.media_mode)
+        job = store.add(url, title, request.transcribe, request.language, request.media_mode, request.output_format, request.quality, request.embed_cover)
         worker.submit(job)
         created.append(asdict(job))
     return created
+
+
+@app.post("/api/preview", dependencies=[Depends(require_access)])
+def preview_media(request: PreviewRequest) -> dict:
+    direct_hosts = {item.strip() for item in os.environ.get("MEETING_DIRECT_MEDIA_HOSTS", "").split(",") if item.strip()}
+    try:
+        url = validate_batch([request.url], direct_hosts=direct_hosts)[0]
+        return preview(url)
+    except UnsafeMediaURL as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(422, f"ไม่สามารถ Preview ได้: {exc}") from exc
 
 
 @app.post("/api/uploads", status_code=202, dependencies=[Depends(require_access)])
