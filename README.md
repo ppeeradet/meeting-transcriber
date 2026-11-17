@@ -59,6 +59,8 @@ GitHub Pages (`docs/`) เป็นระบบแยกที่ประมว
 python -m unittest discover -s tests -v
 ```
 
+ผลที่รันจริงและรายการที่ยังรอทดสอบบันทึกไว้ใน [TESTING.md](TESTING.md) เพื่อไม่ให้การทดสอบด้วย viewport หรือ mock ถูกกล่าวอ้างว่าเป็นการทดสอบบนอุปกรณ์จริง
+
 ตรวจไฟล์รายงานด้วย Microsoft Word ที่ติดตั้งบน Dell และส่งออก PDF สำหรับตรวจหน้ากระดาษ:
 
 ```powershell
