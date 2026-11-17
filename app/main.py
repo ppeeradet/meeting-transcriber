@@ -21,6 +21,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 if not TOKEN_PATH.exists():
     TOKEN_PATH.write_text(secrets.token_urlsafe(32), encoding="utf-8")
 ACCESS_TOKEN = os.environ.get("MEETING_TRANSCRIBER_TOKEN", TOKEN_PATH.read_text(encoding="utf-8").strip())
+REQUIRE_ACCESS = os.environ.get("MEETING_REQUIRE_ACCESS", "1").strip().lower() not in {"0", "false", "no"}
 store = JobStore(DATA_DIR)
 worker = Worker(store)
 app = FastAPI(title="Meeting Transcriber", version="1.0.0")
@@ -34,6 +35,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
 def require_access(request: Request) -> None:
+    if not REQUIRE_ACCESS:
+        return
     supplied = request.headers.get("authorization", "")
     expected = f"Bearer {ACCESS_TOKEN}"
     if not secrets.compare_digest(supplied, expected):

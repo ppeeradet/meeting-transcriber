@@ -46,7 +46,9 @@ data/
 
 Backend bind ที่ `127.0.0.1` โดยค่าเริ่มต้น GitHub Pages ไม่มี API และไม่มีไฟล์งาน หากต้องการเข้าจากมือถือให้เพิ่ม route ใน Tailscale Serve ภายหลังโดยไม่แก้ route เดิม
 
-การติดตั้งบน Dell ใช้ Tailscale Serve path `/meeting-transcriber` สำหรับ Home Portal และ Funnel แยกที่ HTTPS port `10000` สำหรับ GitHub Pages ทุก API ยกเว้น health check ต้องใช้ access token จาก `data/access-token.txt`
+การติดตั้งบน Dell ใช้ Tailscale Serve path `/meeting-transcriber` สำหรับ Home Portal เท่านั้น และตั้ง `MEETING_REQUIRE_ACCESS=0` ใน `run_server.py` เพื่อไม่ต้องกรอกรหัสภายใน tailnet ห้ามเปิด Public Funnel เมื่อปิดการตรวจรหัส
+
+GitHub Pages (`docs/`) เป็นระบบแยกที่ประมวลผลบนอุปกรณ์ผู้ใช้ด้วย Transformers.js/Whisper โดยไม่เรียก API ของ Dell และไม่อัปโหลดไฟล์ ผู้ใช้ดาวน์โหลดผลลัพธ์เป็น TXT, SRT และเอกสาร Word-compatible `.doc` ได้ การดาวน์โหลดวิดีโอจาก URL ยังคงใช้ Home Portal เนื่องจากข้อจำกัด cross-origin ของเบราว์เซอร์
 
 ## ทดสอบ
 
