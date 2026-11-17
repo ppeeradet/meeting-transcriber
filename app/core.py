@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
-import sys
 import threading
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .database import JobDatabase
+
 
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 def utc_now() -> str:
@@ -22,7 +27,9 @@ def utc_now() -> str:
 def safe_name(value: str, fallback: str = "meeting") -> str:
     cleaned = INVALID_FILENAME.sub("_", value).strip().strip(".")
     cleaned = re.sub(r"\s+", " ", cleaned)
-    return (cleaned[:120] or fallback)
+    cleaned = cleaned[:120] or fallback
+    stem = cleaned.split(".", 1)[0].upper()
+    return f"_{cleaned}" if stem in WINDOWS_RESERVED else cleaned
 
 
 def srt_timestamp(seconds: float) -> str:
@@ -33,69 +40,20 @@ def srt_timestamp(seconds: float) -> str:
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
 
-def build_download_command(url: str, output_dir: Path, title: str | None) -> list[str]:
-    template = f"{safe_name(title)}.%(ext)s" if title else "%(title).120B.%(ext)s"
-    command = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        "--no-playlist",
-        "--newline",
-        "-f",
-        "bestaudio/best",
-        "-x",
-        "-k",
-        "--audio-format",
-        "mp3",
-        "--audio-quality",
-        "0",
-        "--write-thumbnail",
-        "--convert-thumbnails",
-        "jpg",
-        "--embed-thumbnail",
-        "--add-metadata",
-        "--windows-filenames",
-        "-o",
-        str(output_dir / template),
-    ]
-    try:
-        import imageio_ffmpeg
+def transcription_language(value: str) -> str | None:
+    return None if value.strip().lower() == "auto" else value.strip().lower()
 
-        command.extend(["--ffmpeg-location", imageio_ffmpeg.get_ffmpeg_exe()])
-    except ImportError:
-        pass
-    command.append(url)
-    return command
+
+def build_download_command(url: str, output_dir: Path, title: str | None) -> list[str]:
+    from .services.downloader import DownloadOptions, build_command
+
+    return build_command(url, output_dir, title, DownloadOptions())
 
 
 def build_video_command(url: str, output_dir: Path, title: str | None) -> list[str]:
-    template = f"{safe_name(title)}.%(ext)s" if title else "%(title).120B.%(ext)s"
-    command = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        "--no-playlist",
-        "--newline",
-        "-f",
-        "bv*+ba/b",
-        "--merge-output-format",
-        "mp4",
-        "--write-thumbnail",
-        "--convert-thumbnails",
-        "jpg",
-        "--add-metadata",
-        "--windows-filenames",
-        "-o",
-        str(output_dir / template),
-    ]
-    try:
-        import imageio_ffmpeg
+    from .services.downloader import DownloadOptions, build_command
 
-        command.extend(["--ffmpeg-location", imageio_ffmpeg.get_ffmpeg_exe()])
-    except ImportError:
-        pass
-    command.append(url)
-    return command
+    return build_command(url, output_dir, title, DownloadOptions(media_mode="video", output_format="mp4", quality="best", embed_cover=False))
 
 
 @dataclass
@@ -114,6 +72,20 @@ class Job:
     output_dir: str = ""
     error: str | None = None
     files: list[str] = field(default_factory=list)
+    checkpoint: str = "created"
+    output_format: str = "mp3"
+    quality: str = "v0"
+    embed_cover: bool = True
+    operation: str = "download"
+    conversion_bitrate: str = "192"
+    conversion_resolution: str = "original"
+    model_profile: str = "balanced"
+    source_size_bytes: int | None = None
+    result_size_bytes: int | None = None
+
+
+class JobCancelled(RuntimeError):
+    pass
 
 
 class JobStore:
@@ -124,19 +96,25 @@ class JobStore:
         self.lock = threading.Lock()
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs_root.mkdir(parents=True, exist_ok=True)
+        self.database = JobDatabase(root)
+        self.migration_report = self.database.migrate_json()
         self.jobs: dict[str, Job] = {}
         self._load()
 
     def _load(self) -> None:
-        if not self.path.exists():
-            return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = self.database.load()
             self.jobs = {item["id"]: Job(**item) for item in payload}
+            changed = False
             for job in self.jobs.values():
-                if job.status in {"downloading", "transcribing"}:
+                if job.status in {"downloading", "converting", "transcribing", "exporting"}:
+                    job.checkpoint = job.status
                     job.status = "interrupted"
                     job.progress = "หยุดระหว่างการรีสตาร์ต — กดเริ่มใหม่"
+                    job.updated_at = utc_now()
+                    changed = True
+            if changed:
+                self._save()
         except (OSError, ValueError, TypeError, KeyError):
             self.jobs = {}
 
@@ -147,8 +125,9 @@ class JobStore:
             encoding="utf-8",
         )
         temp.replace(self.path)
+        self.database.save(asdict(j) for j in self.jobs.values())
 
-    def add(self, url: str, title: str | None, transcribe: bool, language: str, media_mode: str = "audio") -> Job:
+    def add(self, url: str, title: str | None, transcribe: bool, language: str, media_mode: str = "audio", output_format: str = "mp3", quality: str = "v0", embed_cover: bool = True, model_profile: str = "balanced") -> Job:
         job_id = uuid.uuid4().hex[:12]
         directory = self.jobs_root / job_id
         directory.mkdir(parents=True)
@@ -160,6 +139,10 @@ class JobStore:
             transcribe=transcribe,
             language=language,
             output_dir=str(directory),
+            output_format=output_format,
+            quality=quality,
+            embed_cover=embed_cover,
+            model_profile=model_profile,
         )
         with self.lock:
             self.jobs[job.id] = job
@@ -185,6 +168,76 @@ class JobStore:
             self._save()
         return job
 
+    def add_local_file(self, source: Path, filename: str, title: str | None, language: str, operation: str = "transcribe", output_format: str = "mp3", bitrate: str = "192", resolution: str = "original", model_profile: str = "balanced") -> Job:
+        job_id = uuid.uuid4().hex[:12]
+        directory = self.jobs_root / job_id
+        directory.mkdir(parents=True)
+        target = directory / safe_name(Path(filename).name, "upload")
+        try:
+            shutil.move(str(source), str(target))
+            job = Job(
+                id=job_id,
+                url=f"local://{target.name}",
+                input_path=str(target),
+                title=title or Path(filename).stem,
+                transcribe=operation == "transcribe",
+                language=language,
+                output_dir=str(directory),
+                checkpoint="uploaded",
+                operation=operation,
+                output_format=output_format,
+                conversion_bitrate=bitrate,
+                conversion_resolution=resolution,
+                model_profile=model_profile,
+                source_size_bytes=target.stat().st_size,
+            )
+            with self.lock:
+                self.jobs[job.id] = job
+                self._save()
+            return job
+        except Exception:
+            target.unlink(missing_ok=True)
+            directory.rmdir()
+            raise
+
+    def add_existing_file(
+        self,
+        source: Path,
+        title: str | None,
+        language: str,
+        model_profile: str = "balanced",
+        operation: str = "transcribe",
+        output_format: str = "mp3",
+        bitrate: str = "192",
+        resolution: str = "original",
+    ) -> Job:
+        source = source.resolve()
+        if not source.is_file() or source.stat().st_size == 0:
+            raise ValueError("ไม่พบไฟล์สื่อที่เลือก")
+        job_id = uuid.uuid4().hex[:12]
+        directory = self.jobs_root / job_id
+        directory.mkdir(parents=True)
+        job = Job(
+            id=job_id,
+            url=f"library://{source.name}",
+            input_path=str(source),
+            title=title or source.stem,
+            transcribe=operation == "transcribe",
+            language=language,
+            output_dir=str(directory),
+            checkpoint="linked",
+            operation=operation,
+            model_profile=model_profile,
+            source_size_bytes=source.stat().st_size,
+            output_format=output_format,
+            conversion_bitrate=bitrate,
+            conversion_resolution=resolution,
+        )
+        with self.lock:
+            self.jobs[job.id] = job
+            self._save()
+        return job
+
     def update(self, job: Job, **changes: Any) -> None:
         with self.lock:
             for key, value in changes.items():
@@ -199,14 +252,48 @@ class JobStore:
 class Worker:
     def __init__(self, store: JobStore):
         self.store = store
-        self.queue: list[str] = []
+        self.queue: list[str] = [job.id for job in store.all() if job.status == "queued"]
+        self.enqueued: set[str] = set(self.queue)
+        self.current_job_id: str | None = None
+        self.current_process: subprocess.Popen[str] | None = None
+        self.cancel_events: dict[str, threading.Event] = {}
+        self.whisper_models: dict[str, Any] = {}
         self.condition = threading.Condition()
-        threading.Thread(target=self._loop, daemon=True, name="meeting-worker").start()
+        self.thread = threading.Thread(target=self._loop, daemon=True, name="meeting-worker")
+        self.thread.start()
 
     def submit(self, job: Job) -> None:
         with self.condition:
+            if job.status != "queued" or job.id in self.enqueued or job.id == self.current_job_id:
+                return
             self.queue.append(job.id)
+            self.enqueued.add(job.id)
             self.condition.notify()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.condition:
+            return {"alive": self.thread.is_alive(), "queue_depth": len(self.queue), "current_job": self.current_job_id}
+
+    def retry(self, job: Job) -> bool:
+        if job.status not in {"failed", "interrupted", "cancelled"}:
+            return False
+        self.store.update(job, status="queued", progress="รอลองใหม่", error=None)
+        self.submit(job)
+        return True
+
+    def cancel(self, job: Job) -> bool:
+        with self.condition:
+            if job.id in self.enqueued:
+                self.queue = [item for item in self.queue if item != job.id]
+                self.enqueued.discard(job.id)
+                self.store.update(job, status="cancelled", progress="ยกเลิกแล้ว")
+                return True
+            if job.id == self.current_job_id:
+                self.cancel_events.setdefault(job.id, threading.Event()).set()
+                if self.current_process and self.current_process.poll() is None:
+                    self.current_process.terminate()
+                return True
+        return False
 
     def _loop(self) -> None:
         while True:
@@ -214,136 +301,189 @@ class Worker:
                 while not self.queue:
                     self.condition.wait()
                 job_id = self.queue.pop(0)
+                self.enqueued.discard(job_id)
+                self.current_job_id = job_id
+                self.cancel_events[job_id] = threading.Event()
             job = self.store.jobs.get(job_id)
-            if job:
-                self._run(job)
+            try:
+                if job and job.status == "queued":
+                    self._run(job)
+            finally:
+                with self.condition:
+                    self.cancel_events.pop(job_id, None)
+                    self.current_process = None
+                    self.current_job_id = None
+
+    def _cancelled(self, job: Job) -> bool:
+        return self.cancel_events.get(job.id, threading.Event()).is_set()
+
+    def _existing_media(self, job: Job, directory: Path) -> Path | None:
+        patterns = ("*.mp4", "*.mkv", "*.webm") if job.media_mode == "video" else ("*.mp3", "*.m4a", "*.wav", "*.flac")
+        for pattern in patterns:
+            for path in directory.glob(pattern):
+                if path.is_file() and path.stat().st_size > 0:
+                    return path
+        return None
+
+    def _whisper_model(self, profile: str) -> Any:
+        profiles = {"fast": "small", "balanced": "medium", "high": "large-v3"}
+        if profile not in profiles:
+            raise RuntimeError("โปรไฟล์ Whisper ไม่รองรับ")
+        model_name = os.environ.get("MEETING_WHISPER_MODEL", profiles[profile])
+        if model_name not in self.whisper_models:
+            from faster_whisper import WhisperModel
+
+            cpu_threads = int(os.environ.get("MEETING_WHISPER_CPU_THREADS", "4"))
+            self.whisper_models[model_name] = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=max(1, cpu_threads),
+            )
+        return self.whisper_models[model_name]
 
     def _run(self, job: Job) -> None:
         directory = Path(job.output_dir)
         try:
+            if self._cancelled(job):
+                raise JobCancelled()
             if job.input_path:
                 audio_path = Path(job.input_path)
                 if not audio_path.is_file():
                     raise RuntimeError("ไม่พบไฟล์ที่อัปโหลด")
+                if job.operation == "convert":
+                    self._convert(job, audio_path)
+                    files = [p.name for p in directory.iterdir() if p.is_file()]
+                    self.store.update(job, status="completed", checkpoint="completed", progress="แปลงไฟล์เสร็จสมบูรณ์", files=sorted(files))
+                    return
             else:
-                self.store.update(job, status="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
-                if job.media_mode == "video":
-                    self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")
-                    command = build_video_command(job.url, directory, job.title)
-                else:
-                    command = build_download_command(job.url, directory, job.title)
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                assert process.stdout is not None
-                log_path = directory / "download.log"
-                with log_path.open("w", encoding="utf-8") as log:
-                    for line in process.stdout:
-                        log.write(line)
-                        if "[download]" in line and "%" in line:
-                            self.store.update(job, progress=line.strip()[-140:])
-                if process.wait() != 0:
-                    raise RuntimeError("ดาวน์โหลดไม่สำเร็จ กรุณาดู download.log")
-                if job.media_mode == "video":
-                    media_files = [*directory.glob("*.mp4"), *directory.glob("*.mkv"), *directory.glob("*.webm")]
-                    if not media_files:
-                        raise RuntimeError("ไม่พบไฟล์วิดีโอหลังดาวน์โหลด")
-                    audio_path = media_files[0]
-                else:
-                    mp3s = list(directory.glob("*.mp3"))
-                    if not mp3s:
-                        raise RuntimeError("ไม่พบไฟล์ MP3 หลังดาวน์โหลด")
-                    audio_path = mp3s[0]
+                audio_path = self._existing_media(job, directory) if job.checkpoint in {"downloaded", "transcribing"} else None
+                if audio_path is None:
+                    from .security import UnsafeMediaURL, validate_media_url
+
+                    direct_hosts = {item.strip() for item in os.environ.get("MEETING_DIRECT_MEDIA_HOSTS", "").split(",") if item.strip()}
+                    try:
+                        validate_media_url(job.url, direct_hosts=direct_hosts)
+                    except UnsafeMediaURL as exc:
+                        raise RuntimeError(f"URL ไม่ผ่านการตรวจสอบก่อนดาวน์โหลด: {exc}") from exc
+                    self.store.update(job, status="downloading", checkpoint="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
+                    if job.media_mode == "video":
+                        self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")
+                        from .services.downloader import DownloadOptions, build_command
+
+                        command = build_command(job.url, directory, job.title, DownloadOptions("video", job.output_format, job.quality, job.embed_cover))
+                    else:
+                        from .services.downloader import DownloadOptions, build_command
+
+                        command = build_command(job.url, directory, job.title, DownloadOptions("audio", job.output_format, job.quality, job.embed_cover))
+                    process = subprocess.Popen(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    with self.condition:
+                        self.current_process = process
+                    assert process.stdout is not None
+                    log_path = directory / "download.log"
+                    recent_output: deque[str] = deque(maxlen=80)
+                    with log_path.open("w", encoding="utf-8") as log:
+                        for line in process.stdout:
+                            if self._cancelled(job):
+                                process.terminate()
+                                raise JobCancelled()
+                            log.write(line)
+                            recent_output.append(line)
+                            if "[download]" in line and "%" in line:
+                                self.store.update(job, progress=line.strip()[-140:])
+                    if process.wait() != 0:
+                        if self._cancelled(job):
+                            raise JobCancelled()
+                        from .services.downloader import classify_download_error
+
+                        raise RuntimeError(classify_download_error("".join(recent_output)))
+                    audio_path = self._existing_media(job, directory)
+                    if audio_path is None:
+                        raise RuntimeError("ไม่พบไฟล์สื่อหลังดาวน์โหลด")
+                    self.store.update(job, checkpoint="downloaded")
             if job.transcribe:
                 self._transcribe(job, audio_path)
             files = [p.name for p in directory.iterdir() if p.is_file()]
-            self.store.update(job, status="completed", progress="เสร็จสมบูรณ์", files=sorted(files))
+            self.store.update(job, status="completed", checkpoint="completed", progress="เสร็จสมบูรณ์", files=sorted(files))
+        except JobCancelled:
+            self.store.update(job, status="cancelled", progress="ยกเลิกแล้ว", error=None)
         except Exception as exc:  # worker boundary: retain error for UI
             self.store.update(job, status="failed", progress="งานล้มเหลว", error=str(exc))
 
+    def _convert(self, job: Job, source: Path) -> None:
+        from .services.converter import ConversionOptions, build_conversion_command, output_path
+
+        options = ConversionOptions(job.output_format, job.conversion_bitrate, job.conversion_resolution)
+        target = output_path(source, Path(job.output_dir), job.output_format)
+        self.store.update(job, status="converting", checkpoint="converting", progress="กำลังแปลงไฟล์", error=None)
+        process = subprocess.Popen(
+            build_conversion_command(source, target, options),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        with self.condition:
+            self.current_process = process
+        log_path = Path(job.output_dir) / "conversion.log"
+        assert process.stdout is not None
+        with log_path.open("w", encoding="utf-8") as log:
+            for line in process.stdout:
+                if self._cancelled(job):
+                    process.terminate()
+                    target.unlink(missing_ok=True)
+                    raise JobCancelled()
+                log.write(line)
+        if process.wait() != 0:
+            target.unlink(missing_ok=True)
+            raise RuntimeError("แปลงไฟล์ไม่สำเร็จ กรุณาดู conversion.log")
+        if not target.is_file() or target.stat().st_size == 0:
+            target.unlink(missing_ok=True)
+            raise RuntimeError("ไม่พบไฟล์ผลลัพธ์หลังแปลง")
+        self.store.update(job, checkpoint="converted", progress="แปลงไฟล์แล้ว", result_size_bytes=target.stat().st_size)
+
     def _transcribe(self, job: Job, audio_path: Path) -> None:
-        self.store.update(job, status="transcribing", progress="กำลังโหลดโมเดล Whisper")
+        self.store.update(job, status="transcribing", checkpoint="transcribing", progress="กำลังโหลดโมเดล Whisper")
         try:
-            from faster_whisper import WhisperModel
+            model = self._whisper_model(job.model_profile)
         except ImportError as exc:
             raise RuntimeError("ยังไม่ได้ติดตั้ง Faster Whisper; ติดตั้ง requirements.txt ก่อน") from exc
-        model = WhisperModel("large-v3", device="cpu", compute_type="int8")
-        segments, info = model.transcribe(str(audio_path), language=job.language, vad_filter=True)
+        partial_path = Path(job.output_dir) / "transcript.partial.json"
         rows: list[dict[str, Any]] = []
-        txt: list[str] = []
-        srt: list[str] = []
-        for index, segment in enumerate(segments, 1):
+        if partial_path.is_file():
+            try:
+                rows = json.loads(partial_path.read_text(encoding="utf-8")).get("segments", [])
+            except (OSError, ValueError, TypeError):
+                rows = []
+        resume_at = float(rows[-1]["end"]) if rows else 0.0
+        segments, info = model.transcribe(
+            str(audio_path),
+            language=transcription_language(job.language),
+            vad_filter=True,
+            clip_timestamps=[resume_at] if resume_at > 0 else "0",
+        )
+        for index, segment in enumerate(segments, len(rows) + 1):
+            if self._cancelled(job):
+                raise JobCancelled()
             text = segment.text.strip()
             rows.append({"start": segment.start, "end": segment.end, "text": text})
-            txt.append(f"[{srt_timestamp(segment.start).replace(',', '.')}] {text}")
-            srt.extend([str(index), f"{srt_timestamp(segment.start)} --> {srt_timestamp(segment.end)}", text, ""])
+            temp = partial_path.with_suffix(".tmp")
+            temp.write_text(json.dumps({"segments": rows}, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp.replace(partial_path)
             if index % 10 == 0:
                 self.store.update(job, progress=f"ถอดเสียงแล้ว {index} ช่วง")
-        audio_path.with_name("transcript.txt").write_text("\n".join(txt), encoding="utf-8")
-        audio_path.with_name("transcript.srt").write_text("\n".join(srt), encoding="utf-8")
-        audio_path.with_name("transcript.json").write_text(
-            json.dumps({"language": info.language, "segments": rows}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        self._write_word_documents(job, rows)
+        from .services.exporter import export_transcript
 
-    def _write_word_documents(self, job: Job, rows: list[dict[str, Any]]) -> None:
-        from docx import Document
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.shared import Inches, Pt
-
-        directory = Path(job.output_dir)
-        title = job.title or "รายงานการประชุม"
-
-        transcript = Document()
-        section = transcript.sections[0]
-        section.top_margin = section.bottom_margin = Inches(0.7)
-        heading = transcript.add_heading(title, 0)
-        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        transcript.add_paragraph(f"ต้นทาง: {job.url}")
-        transcript.add_paragraph(f"ภาษา: {job.language} | สร้างเมื่อ: {utc_now()}")
-        transcript.add_heading("ถอดเสียงฉบับเต็ม", level=1)
-        for row in rows:
-            paragraph = transcript.add_paragraph()
-            timestamp = paragraph.add_run(f"[{srt_timestamp(row['start']).replace(',', '.')}] ")
-            timestamp.bold = True
-            timestamp.font.size = Pt(9)
-            paragraph.add_run(row["text"])
-        transcript.save(directory / "transcript_full.docx")
-
-        report = Document()
-        report.sections[0].top_margin = report.sections[0].bottom_margin = Inches(0.7)
-        report_heading = report.add_heading("รายงานการประชุม", 0)
-        report_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        table = report.add_table(rows=5, cols=2)
-        table.style = "Table Grid"
-        metadata = [
-            ("ชื่อการประชุม", title),
-            ("วันและเวลา", "กรุณาตรวจสอบ/กรอกข้อมูล"),
-            ("สถานที่/ช่องทาง", job.url),
-            ("ประธาน/ผู้จัด", "กรุณาตรวจสอบ/กรอกข้อมูล"),
-            ("ผู้เข้าร่วม", "กรุณาตรวจสอบ/กรอกข้อมูล"),
-        ]
-        for row, (label, value) in zip(table.rows, metadata):
-            row.cells[0].text = label
-            row.cells[1].text = value
-        decisions = [r["text"] for r in rows if any(k in r["text"] for k in ("มติ", "ตกลง", "สรุปว่า"))]
-        actions = [r["text"] for r in rows if any(k in r["text"] for k in ("มอบหมาย", "ดำเนินการ", "รับผิดชอบ", "ภายใน", "กำหนด"))]
-        for heading_text, items in (("วาระและประเด็นสำคัญ", []), ("มติที่ประชุม (รอตรวจทาน)", decisions), ("งานที่มอบหมาย (รอตรวจทาน)", actions)):
-            report.add_heading(heading_text, level=1)
-            if items:
-                for item in items:
-                    report.add_paragraph(item, style="List Bullet")
-            else:
-                report.add_paragraph("กรุณาตรวจสอบและสรุปจากถอดเสียงฉบับเต็ม")
-        report.add_heading("ภาคผนวก: ถอดเสียงพร้อมเวลา", level=1)
-        for row in rows:
-            report.add_paragraph(f"[{srt_timestamp(row['start']).replace(',', '.')}] {row['text']}")
-        report.save(directory / "meeting_report.docx")
+        export_transcript(Path(job.output_dir), job.title or "รายงานการประชุม", job.url, info.language, rows, utc_now())
+        partial_path.unlink(missing_ok=True)
 
