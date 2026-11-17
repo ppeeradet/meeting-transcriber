@@ -59,3 +59,9 @@ GitHub Pages (`docs/`) เป็นระบบแยกที่ประมว
 python -m unittest discover -s tests -v
 ```
 
+ตรวจไฟล์รายงานด้วย Microsoft Word ที่ติดตั้งบน Dell และส่งออก PDF สำหรับตรวจหน้ากระดาษ:
+
+```powershell
+.\scripts\verify-docx-msword.ps1 -DocumentPath .\data\jobs\<job-id>\meeting_report.docx
+```
+
