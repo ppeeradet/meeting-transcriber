@@ -45,6 +45,7 @@ class CreateJobs(BaseModel):
     title: str | None = Field(default=None, max_length=120)
     transcribe: bool = False
     language: str = Field(default="th", max_length=10)
+    media_mode: str = Field(default="audio", pattern="^(audio|video)$")
 
 
 ALLOWED_UPLOADS = {".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mov", ".mkv", ".aac", ".flac", ".ogg", ".opus", ".mpeg", ".mpg"}
@@ -74,7 +75,7 @@ def create_jobs(request: CreateJobs) -> list[dict]:
         if not url.startswith(("https://", "http://")):
             raise HTTPException(400, f"URL ลำดับที่ {index} ไม่ถูกต้อง")
         title = request.title if len(request.urls) == 1 else None
-        job = store.add(url, title, request.transcribe, request.language)
+        job = store.add(url, title, request.transcribe, request.language, request.media_mode)
         worker.submit(job)
         created.append(asdict(job))
     return created

@@ -68,11 +68,42 @@ def build_download_command(url: str, output_dir: Path, title: str | None) -> lis
     return command
 
 
+def build_video_command(url: str, output_dir: Path, title: str | None) -> list[str]:
+    template = f"{safe_name(title)}.%(ext)s" if title else "%(title).120B.%(ext)s"
+    command = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--no-playlist",
+        "--newline",
+        "-f",
+        "bv*+ba/b",
+        "--merge-output-format",
+        "mp4",
+        "--write-thumbnail",
+        "--convert-thumbnails",
+        "jpg",
+        "--add-metadata",
+        "--windows-filenames",
+        "-o",
+        str(output_dir / template),
+    ]
+    try:
+        import imageio_ffmpeg
+
+        command.extend(["--ffmpeg-location", imageio_ffmpeg.get_ffmpeg_exe()])
+    except ImportError:
+        pass
+    command.append(url)
+    return command
+
+
 @dataclass
 class Job:
     id: str
     url: str
     input_path: str | None = None
+    media_mode: str = "audio"
     title: str | None = None
     transcribe: bool = False
     language: str = "th"
@@ -117,13 +148,14 @@ class JobStore:
         )
         temp.replace(self.path)
 
-    def add(self, url: str, title: str | None, transcribe: bool, language: str) -> Job:
+    def add(self, url: str, title: str | None, transcribe: bool, language: str, media_mode: str = "audio") -> Job:
         job_id = uuid.uuid4().hex[:12]
         directory = self.jobs_root / job_id
         directory.mkdir(parents=True)
         job = Job(
             id=job_id,
             url=url,
+            media_mode=media_mode,
             title=title or None,
             transcribe=transcribe,
             language=language,
@@ -195,7 +227,11 @@ class Worker:
                     raise RuntimeError("ไม่พบไฟล์ที่อัปโหลด")
             else:
                 self.store.update(job, status="downloading", progress="กำลังดาวน์โหลดเสียงและภาพปก", error=None)
-                command = build_download_command(job.url, directory, job.title)
+                if job.media_mode == "video":
+                    self.store.update(job, progress="กำลังดาวน์โหลดวิดีโอและเสียงคุณภาพสูงสุด")
+                    command = build_video_command(job.url, directory, job.title)
+                else:
+                    command = build_download_command(job.url, directory, job.title)
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
@@ -214,10 +250,16 @@ class Worker:
                             self.store.update(job, progress=line.strip()[-140:])
                 if process.wait() != 0:
                     raise RuntimeError("ดาวน์โหลดไม่สำเร็จ กรุณาดู download.log")
-                mp3s = list(directory.glob("*.mp3"))
-                if not mp3s:
-                    raise RuntimeError("ไม่พบไฟล์ MP3 หลังดาวน์โหลด")
-                audio_path = mp3s[0]
+                if job.media_mode == "video":
+                    media_files = [*directory.glob("*.mp4"), *directory.glob("*.mkv"), *directory.glob("*.webm")]
+                    if not media_files:
+                        raise RuntimeError("ไม่พบไฟล์วิดีโอหลังดาวน์โหลด")
+                    audio_path = media_files[0]
+                else:
+                    mp3s = list(directory.glob("*.mp3"))
+                    if not mp3s:
+                        raise RuntimeError("ไม่พบไฟล์ MP3 หลังดาวน์โหลด")
+                    audio_path = mp3s[0]
             if job.transcribe:
                 self._transcribe(job, audio_path)
             files = [p.name for p in directory.iterdir() if p.is_file()]
