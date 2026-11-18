@@ -34,6 +34,9 @@ function renderJobs(jobs) {
     const bar = info.value === null ? '<em class="indeterminate"></em>' : `<em style="width:${info.value}%"></em>`;
     const retry = ["failed", "interrupted", "cancelled"].includes(job.status) ? `<button class="ghost retry" data-job="${esc(job.id)}">ลองใหม่</button>` : "";
     const cancel = ["queued", "downloading", "converting", "transcribing"].includes(job.status) ? `<button class="ghost cancel-job" data-job="${esc(job.id)}">ยกเลิกงาน</button>` : "";
+    const close = job.archived
+      ? `<button class="ghost restore-job" data-job="${esc(job.id)}">เปิดงานกลับ</button>`
+      : (["completed", "failed", "cancelled", "interrupted", "queued"].includes(job.status) ? `<button class="ghost archive-job" data-job="${esc(job.id)}">${job.status === "queued" ? "ยกเลิกและปิด" : "ปิดงาน"}</button>` : "");
     const files = job.files.map((file) => {
       const transcribe = /\.(mp3|mp4|m4a|wav|webm|mov|mkv|aac|flac|ogg|opus|mpeg|mpg)$/i.test(file)
         ? `<button class="ghost transcribe-file" data-job="${esc(job.id)}" data-file="${esc(file)}">ถอดเสียงไฟล์นี้</button>` : "";
@@ -42,7 +45,7 @@ function renderJobs(jobs) {
     }).join("");
     const edit = job.files.includes("transcript.json") ? `<button class="ghost edit-transcript" data-job="${esc(job.id)}">แก้ไขถอดเสียง</button>` : "";
     const sizes = job.source_size_bytes ? `<p class="media-sizes">ต้นฉบับ ${formatBytes(job.source_size_bytes)}${job.result_size_bytes ? ` · ผลลัพธ์ ${formatBytes(job.result_size_bytes)}` : ""}</p>` : "";
-    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><span class="status">${esc(job.status)}</span></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p>${sizes}<div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}</div></article>`;
+    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><span class="status">${job.archived ? "ปิดแล้ว · " : ""}${esc(job.status)}</span></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p>${sizes}<div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}${close}</div></article>`;
   }).join("");
 }
 
@@ -56,7 +59,7 @@ function updateStats(jobs) {
 
 function filterQuery() {
   const params = new URLSearchParams();
-  [["search", "#filter-search"], ["status", "#filter-status"], ["media_type", "#filter-media"]].forEach(([name, selector]) => {
+  [["search", "#filter-search"], ["status", "#filter-status"], ["media_type", "#filter-media"], ["archived", "#filter-archived"]].forEach(([name, selector]) => {
     const value = document.querySelector(selector).value.trim();
     if (value) params.set(name, value);
   });
@@ -219,6 +222,15 @@ jobsEl.onclick = async (event) => {
     finally { fileButton.disabled = false; }
     return;
   }
+  const archiveAction = event.target.closest(".archive-job,.restore-job");
+  if (archiveAction) {
+    const closing = archiveAction.classList.contains("archive-job");
+    if (closing && !confirm("ปิดงานนี้จากคิว? ไฟล์และเอกสารจะยังถูกเก็บไว้")) return;
+    archiveAction.disabled = true;
+    const endpoint = closing ? "archive" : "restore";
+    const response = await fetch(`${base}/api/jobs/${encodeURIComponent(archiveAction.dataset.job)}/${endpoint}`, { method: "POST", headers: headers() });
+    if (!response.ok) alert(await response.text()); await load(); return;
+  }
   const action = event.target.closest(".retry,.cancel-job"); if (!action) return;
   action.disabled = true;
   const endpoint = action.classList.contains("retry") ? "retry" : "cancel";
@@ -227,7 +239,13 @@ jobsEl.onclick = async (event) => {
 };
 
 document.querySelector("#refresh").onclick = load;
+document.querySelector("#archive-finished").onclick = async () => {
+  if (!confirm("ปิดงานที่เสร็จ ล้มเหลว ถูกยกเลิก หรือ interrupted ทั้งหมด? ไฟล์จะไม่ถูกลบ")) return;
+  const response = await fetch(`${base}/api/jobs/archive-finished`, { method: "POST", headers: headers() });
+  if (!response.ok) { alert(await response.text()); return; }
+  const result = await response.json(); alert(`ปิดงานแล้ว ${result.archived} รายการ`); await load();
+};
 document.querySelector("#preview-close").onclick = () => { document.querySelector("#library-audio").pause(); document.querySelector("#library-video").pause(); document.querySelector("#library-preview").hidden = true; };
-document.querySelectorAll("#filter-search,#filter-status,#filter-media").forEach((control) => control.addEventListener("input", load));
+document.querySelectorAll("#filter-search,#filter-status,#filter-media,#filter-archived").forEach((control) => control.addEventListener("input", load));
 load();
 setInterval(load, 4000);
