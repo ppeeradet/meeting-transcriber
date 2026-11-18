@@ -45,7 +45,7 @@ function renderJobs(jobs) {
     }).join("");
     const edit = job.files.includes("transcript.json") ? `<button class="ghost edit-transcript" data-job="${esc(job.id)}">แก้ไขถอดเสียง</button>` : "";
     const sizes = job.source_size_bytes ? `<p class="media-sizes">ต้นฉบับ ${formatBytes(job.source_size_bytes)}${job.result_size_bytes ? ` · ผลลัพธ์ ${formatBytes(job.result_size_bytes)}` : ""}</p>` : "";
-    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><span class="status">${job.archived ? "ปิดแล้ว · " : ""}${esc(job.status)}</span></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p>${sizes}<div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}${close}</div></article>`;
+    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><div class="job-head-actions"><span class="status">${job.archived ? "ปิดแล้ว · " : ""}${esc(job.status)}</span>${close}</div></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p>${sizes}<div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}</div></article>`;
   }).join("");
 }
 
@@ -239,12 +239,6 @@ jobsEl.onclick = async (event) => {
 };
 
 document.querySelector("#refresh").onclick = load;
-document.querySelector("#archive-finished").onclick = async () => {
-  if (!confirm("ปิดงานที่เสร็จ ล้มเหลว ถูกยกเลิก หรือ interrupted ทั้งหมด? ไฟล์จะไม่ถูกลบ")) return;
-  const response = await fetch(`${base}/api/jobs/archive-finished`, { method: "POST", headers: headers() });
-  if (!response.ok) { alert(await response.text()); return; }
-  const result = await response.json(); alert(`ปิดงานแล้ว ${result.archived} รายการ`); await load();
-};
 document.querySelector("#preview-close").onclick = () => { document.querySelector("#library-audio").pause(); document.querySelector("#library-video").pause(); document.querySelector("#library-preview").hidden = true; };
 document.querySelectorAll("#filter-search,#filter-status,#filter-media,#filter-archived").forEach((control) => control.addEventListener("input", load));
 load();
