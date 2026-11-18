@@ -36,7 +36,7 @@ function renderJobs(jobs) {
     const cancel = ["queued", "downloading", "converting", "transcribing"].includes(job.status) ? `<button class="ghost cancel-job" data-job="${esc(job.id)}">ยกเลิกงาน</button>` : "";
     const close = job.archived
       ? `<button class="ghost restore-job" data-job="${esc(job.id)}">เปิดงานกลับ</button>`
-      : (["completed", "failed", "cancelled", "interrupted", "queued"].includes(job.status) ? `<button class="ghost archive-job" data-job="${esc(job.id)}">${job.status === "queued" ? "ยกเลิกและปิด" : "ปิดงาน"}</button>` : "");
+      : (["completed", "failed", "cancelled", "interrupted", "queued"].includes(job.status) ? `<button class="archive-job" data-job="${esc(job.id)}">${job.status === "queued" ? "ยกเลิกและปิดงานนี้" : "ปิดงานนี้"}</button>` : "");
     const files = job.files.map((file) => {
       const transcribe = /\.(mp3|mp4|m4a|wav|webm|mov|mkv|aac|flac|ogg|opus|mpeg|mpg)$/i.test(file)
         ? `<button class="ghost transcribe-file" data-job="${esc(job.id)}" data-file="${esc(file)}">ถอดเสียงไฟล์นี้</button>` : "";

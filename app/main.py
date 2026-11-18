@@ -110,7 +110,10 @@ MIN_FREE_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(BASE_DIR / "static" / "index.html")
+    return FileResponse(
+        BASE_DIR / "static" / "index.html",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.get("/api/health")

@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Personal Media Hub</title>
-  <link rel="stylesheet" href="static/style.css">
-  <link rel="stylesheet" href="static/library.css">
-  <link rel="stylesheet" href="static/job-actions.css">
+  <link rel="stylesheet" href="static/style.css?v=20261118-1">
+  <link rel="stylesheet" href="static/library.css?v=20261118-1">
+  <link rel="stylesheet" href="static/job-actions.css?v=20261118-1">
   <style>.job-progress .indeterminate{width:38%;animation:job-slide 1.2s ease-in-out infinite}@keyframes job-slide{from{transform:translateX(-110%)}to{transform:translateX(285%)}}.preview-card{display:grid;grid-template-columns:120px 1fr;gap:16px;align-items:center;margin:14px 0;padding:14px;border-radius:14px;background:#310914;border:1px solid #a83b58}.preview-card img{width:120px;max-height:90px;object-fit:cover;border-radius:10px}.preview-card h3{margin:0 0 6px}.preview-card p{margin:3px 0;color:#edbdb5}@media(max-width:650px){.preview-card{grid-template-columns:1fr}.preview-card img{width:100%;max-height:180px}}</style>
 </head>
 <body>
@@ -32,7 +32,7 @@
     <section class="panel library-preview" id="library-preview" hidden><div class="section-title"><h2 id="preview-title">เล่นไฟล์</h2><button class="ghost" id="preview-close">ปิด</button></div><audio id="library-audio" controls hidden></audio><video id="library-video" controls playsinline hidden></video></section>
     <section><div class="section-title"><div><span class="eyebrow">MEDIA LIBRARY</span><h2>คิวงานและประวัติ</h2></div><button class="ghost" id="refresh">รีเฟรช</button></div><div class="library-filters"><label>ค้นหา<input id="filter-search" type="search" placeholder="ชื่อไฟล์หรือ URL"></label><label>สถานะ<select id="filter-status"><option value="">ทั้งหมด</option><option value="queued">Queued</option><option value="downloading">Downloading</option><option value="converting">Converting</option><option value="transcribing">Transcribing</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="interrupted">Interrupted</option></select></label><label>ประเภท<select id="filter-media"><option value="">ทั้งหมด</option><option value="audio">Audio</option><option value="video">Video</option><option value="convert">Conversion</option></select></label><label>มุมมอง<select id="filter-archived"><option value="active">งานที่เปิดอยู่</option><option value="closed">งานที่ปิดแล้ว</option><option value="all">งานทั้งหมด</option></select></label></div><div id="jobs" class="jobs"></div></section>
   </main>
-  <script src="static/app.js"></script>
+  <script src="static/app.js?v=20261118-1"></script>
 </body>
 </html>
 
