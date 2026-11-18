@@ -159,10 +159,17 @@ def jobs(
     media_type: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    archived: str = "active",
 ) -> list[dict]:
+    if archived not in {"active", "closed", "all"}:
+        raise HTTPException(400, "ตัวกรองงานที่ปิดแล้วไม่ถูกต้อง")
     results: list[dict] = []
     needle = (search or "").strip().casefold()
     for job in store.all():
+        if archived == "active" and job.archived:
+            continue
+        if archived == "closed" and not job.archived:
+            continue
         item = asdict(job)
         item_platform = "Local File" if job.url.startswith("local://") else platform_name(job.url)
         if needle and needle not in f"{job.title or ''} {job.url}".casefold():
@@ -397,6 +404,44 @@ def cancel_job(job_id: str) -> dict:
         raise HTTPException(404, "ไม่พบงาน")
     if not worker.cancel(job):
         raise HTTPException(409, "งานนี้ไม่ได้อยู่ในคิวหรือกำลังทำงาน")
+    return asdict(job)
+
+
+ARCHIVABLE_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+
+
+@app.post("/api/jobs/archive-finished", dependencies=[Depends(require_access)])
+def archive_finished_jobs() -> dict:
+    archived_ids: list[str] = []
+    for job in store.all():
+        if not job.archived and job.status in ARCHIVABLE_STATUSES:
+            store.set_archived(job, True)
+            archived_ids.append(job.id)
+    return {"archived": len(archived_ids), "job_ids": archived_ids}
+
+
+@app.post("/api/jobs/{job_id}/archive", dependencies=[Depends(require_access)])
+def archive_job(job_id: str) -> dict:
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "ไม่พบงาน")
+    if job.archived:
+        return asdict(job)
+    if job.status == "queued":
+        if not worker.cancel(job):
+            raise HTTPException(409, "ยกเลิกงานที่รอคิวไม่สำเร็จ")
+    elif job.status not in ARCHIVABLE_STATUSES:
+        raise HTTPException(409, "กรุณายกเลิกงานที่กำลังทำก่อนปิดงาน")
+    store.set_archived(job, True)
+    return asdict(job)
+
+
+@app.post("/api/jobs/{job_id}/restore", dependencies=[Depends(require_access)])
+def restore_job(job_id: str) -> dict:
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "ไม่พบงาน")
+    store.set_archived(job, False)
     return asdict(job)
 
 

@@ -82,6 +82,8 @@ class Job:
     model_profile: str = "balanced"
     source_size_bytes: int | None = None
     result_size_bytes: int | None = None
+    archived: bool = False
+    archived_at: str | None = None
 
 
 class JobCancelled(RuntimeError):
@@ -244,6 +246,9 @@ class JobStore:
                 setattr(job, key, value)
             job.updated_at = utc_now()
             self._save()
+
+    def set_archived(self, job: Job, archived: bool) -> None:
+        self.update(job, archived=archived, archived_at=utc_now() if archived else None)
 
     def all(self) -> list[Job]:
         return sorted(self.jobs.values(), key=lambda j: j.created_at, reverse=True)

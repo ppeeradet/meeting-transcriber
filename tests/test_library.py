@@ -9,6 +9,42 @@ from fastapi import HTTPException
 
 
 class MediaLibraryTests(unittest.TestCase):
+    def test_archived_jobs_are_hidden_by_default_and_can_be_filtered(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            active = store.add("https://youtu.be/active", "งานเปิด", False, "th")
+            closed = store.add("https://youtu.be/closed", "งานปิด", False, "th")
+            store.update(closed, status="completed", checkpoint="completed")
+            store.set_archived(closed, True)
+            with patch.object(main_module, "store", store):
+                self.assertEqual([item["id"] for item in main_module.jobs()], [active.id])
+                self.assertEqual([item["id"] for item in main_module.jobs(archived="closed")], [closed.id])
+                self.assertEqual({item["id"] for item in main_module.jobs(archived="all")}, {active.id, closed.id})
+
+    def test_close_and_restore_job_preserve_output_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            job = store.add("https://youtu.be/demo", "งานเสร็จ", False, "th")
+            output = Path(job.output_dir) / "result.mp3"
+            output.write_bytes(b"media")
+            store.update(job, status="completed", checkpoint="completed", files=[output.name])
+            with patch.object(main_module, "store", store):
+                closed = main_module.archive_job(job.id)
+                self.assertTrue(closed["archived"])
+                self.assertTrue(output.is_file())
+                restored = main_module.restore_job(job.id)
+                self.assertFalse(restored["archived"])
+                self.assertTrue(output.is_file())
+
+    def test_close_queued_job_cancels_it_first(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            job = store.add("https://youtu.be/demo", "งานรอ", False, "th")
+            with patch.object(main_module, "store", store), patch.object(main_module.worker, "cancel", return_value=True) as cancel:
+                result = main_module.archive_job(job.id)
+            cancel.assert_called_once_with(job)
+            self.assertTrue(result["archived"])
+
     def test_search_and_status_filters(self):
         with tempfile.TemporaryDirectory() as temp:
             store = JobStore(Path(temp))
