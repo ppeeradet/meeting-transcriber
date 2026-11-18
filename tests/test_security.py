@@ -13,12 +13,16 @@ def private_dns(host, port, type=socket.SOCK_STREAM):
 
 
 class SecurityTests(unittest.TestCase):
-    def test_tailnet_request_requires_loopback_and_same_origin(self):
+    def test_tailnet_request_allows_loopback_or_tailscale_and_requires_same_origin(self):
         validate_request_context("tailnet", "127.0.0.1", "dell-pc.tail187694.ts.net", "https://dell-pc.tail187694.ts.net", "https://dell-pc.tail187694.ts.net")
-        with self.assertRaisesRegex(UnsafeRequest, "loopback"):
-            validate_request_context("tailnet", "100.64.0.2", "dell-pc.tail187694.ts.net", None, "https://dell-pc.tail187694.ts.net")
+        validate_request_context("tailnet", "100.64.0.2", "dell-pc.tail187694.ts.net", None, "https://dell-pc.tail187694.ts.net")
+        validate_request_context("tailnet", "100.127.255.254", "dell-pc.tail187694.ts.net", None, "https://dell-pc.tail187694.ts.net")
+        validate_request_context("tailnet", "fd7a:115c:a1e0::1234", "dell-pc.tail187694.ts.net", None, "https://dell-pc.tail187694.ts.net")
+        for address in ("100.128.0.1", "192.168.1.10", "8.8.8.8"):
+            with self.subTest(address=address), self.assertRaisesRegex(UnsafeRequest, "Tailscale"):
+                validate_request_context("tailnet", address, "dell-pc.tail187694.ts.net", None, "https://dell-pc.tail187694.ts.net")
         with self.assertRaisesRegex(UnsafeRequest, "Origin"):
-            validate_request_context("tailnet", "127.0.0.1", "dell-pc.tail187694.ts.net", "https://evil.example", "https://dell-pc.tail187694.ts.net")
+            validate_request_context("tailnet", "100.64.0.2", "dell-pc.tail187694.ts.net", "https://evil.example", "https://dell-pc.tail187694.ts.net")
 
     def test_token_mode_requires_exact_bearer_token(self):
         validate_bearer_token("Bearer secret-value", "secret-value")

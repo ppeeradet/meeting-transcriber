@@ -13,6 +13,11 @@ PLATFORM_HOSTS = {
     "dai.ly", "soundcloud.com",
 }
 
+TAILSCALE_CLIENT_NETWORKS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
 
 class UnsafeMediaURL(ValueError):
     pass
@@ -40,8 +45,8 @@ def validate_request_context(mode: str, client_host: str, host: str, origin: str
             address = ipaddress.ip_address(client_host)
         except ValueError as exc:
             raise UnsafeRequest("Client address ไม่ถูกต้อง") from exc
-        if not address.is_loopback:
-            raise UnsafeRequest("Tailnet proxy ต้องเชื่อมต่อผ่าน loopback")
+        if not address.is_loopback and not any(address in network for network in TAILSCALE_CLIENT_NETWORKS):
+            raise UnsafeRequest("อนุญาตเฉพาะ client จาก loopback หรือ Tailscale")
 
 
 def _matches_host(host: str, allowed: str) -> bool:
