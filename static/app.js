@@ -41,11 +41,15 @@ function renderJobs(jobs) {
       const transcribe = /\.(mp3|mp4|m4a|wav|webm|mov|mkv|aac|flac|ogg|opus|mpeg|mpg)$/i.test(file)
         ? `<button class="ghost transcribe-file" data-job="${esc(job.id)}" data-file="${esc(file)}">ถอดเสียงไฟล์นี้</button>` : "";
       const mediaActions = transcribe ? `<button class="ghost play-media" data-job="${esc(job.id)}" data-file="${esc(file)}">เล่น</button><button class="ghost convert-file" data-job="${esc(job.id)}" data-file="${esc(file)}">แปลงไฟล์นี้</button>` : "";
-      return `<button class="ghost file" data-job="${esc(job.id)}" data-file="${esc(file)}">ดาวน์โหลด ${esc(file)}</button>${mediaActions}${transcribe}`;
+      const manage = `<button class="ghost copy-managed-file" data-job="${esc(job.id)}" data-file="${esc(file)}">คัดลอก</button><button class="ghost move-managed-file" data-job="${esc(job.id)}" data-file="${esc(file)}">ย้าย</button><button class="ghost delete-managed-file" data-job="${esc(job.id)}" data-file="${esc(file)}">ลบไฟล์</button>`;
+      return `<div class="managed-file"><b>${esc(file)}</b><button class="ghost file" data-job="${esc(job.id)}" data-file="${esc(file)}">ดาวน์โหลด</button>${mediaActions}${transcribe}${manage}</div>`;
     }).join("");
     const edit = job.files.includes("transcript.json") ? `<button class="ghost edit-transcript" data-job="${esc(job.id)}">แก้ไขถอดเสียง</button>` : "";
     const sizes = job.source_size_bytes ? `<p class="media-sizes">ต้นฉบับ ${formatBytes(job.source_size_bytes)}${job.result_size_bytes ? ` · ผลลัพธ์ ${formatBytes(job.result_size_bytes)}` : ""}</p>` : "";
-    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><div class="job-head-actions"><span class="status">${job.archived ? "ปิดแล้ว · " : ""}${esc(job.status)}</span>${close}</div></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p>${sizes}<div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}</div></article>`;
+    const missing = job.missing_files?.length ? `<p class="error">ไฟล์ถูกย้ายหรือลบจากภายนอก ${job.missing_files.length} รายการ</p>` : "";
+    const empty = !job.files.length ? '<p class="error">ไม่พบไฟล์จริงของงานนี้บน Dell</p>' : "";
+    const removeRecord = !job.files.length && !["queued", "preparing", "downloading", "converting", "transcribing", "exporting"].includes(job.status) ? `<button class="delete-job-record" data-job="${esc(job.id)}">ลบรายการงาน</button>` : "";
+    return `<article class="job"><div class="job-head"><strong>${esc(job.title || "ใช้ชื่อคลิปอัตโนมัติ")}</strong><div class="job-head-actions"><span class="status">${job.archived ? "ปิดแล้ว · " : ""}${esc(job.status)}</span>${close}</div></div><p class="url">${esc(job.platform || "")} · ${esc(job.url)}</p>${sizes}${missing}${empty}<div class="job-progress"><span><b>สถานะงาน</b><i>${esc(info.label)}</i></span><div role="progressbar" aria-valuemin="0" aria-valuemax="100" ${attrs}>${bar}</div></div><p>${esc(job.progress)}</p>${job.error ? `<p class="error">${esc(job.error)}</p>` : ""}<div class="files">${edit}${files}${retry}${cancel}${removeRecord}</div></article>`;
   }).join("");
 }
 
@@ -172,6 +176,31 @@ document.querySelector("#editor-save").onclick = async () => {
 document.querySelector("#editor-close").onclick = () => { document.querySelector("#transcript-editor").hidden = true; document.querySelector("#editor-audio").pause(); };
 
 jobsEl.onclick = async (event) => {
+  const managedFile = event.target.closest(".copy-managed-file,.move-managed-file,.delete-managed-file");
+  if (managedFile) {
+    const deleting = managedFile.classList.contains("delete-managed-file");
+    const moving = managedFile.classList.contains("move-managed-file");
+    if (deleting && !confirm(`ลบไฟล์ ${managedFile.dataset.file} ถาวร?`)) return;
+    if (moving && !confirm(`ย้ายไฟล์ ${managedFile.dataset.file} ออกจากโฟลเดอร์งาน?`)) return;
+    managedFile.disabled = true;
+    const endpoint = deleting ? "" : moving ? "/move" : "/copy";
+    const options = deleting ? { method: "DELETE", headers: headers() } : {
+      method: "POST", headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ destination: document.querySelector("#file-destination").value }),
+    };
+    const response = await fetch(`${base}/api/jobs/${encodeURIComponent(managedFile.dataset.job)}/files/${encodeURIComponent(managedFile.dataset.file)}${endpoint}`, options);
+    if (!response.ok) alert(await response.text());
+    else { const result = await response.json(); alert(result.destination ? `สำเร็จ: ${result.destination}` : "ลบไฟล์แล้ว"); }
+    await load(); return;
+  }
+  const deleteRecord = event.target.closest(".delete-job-record");
+  if (deleteRecord) {
+    if (!confirm("ลบเฉพาะรายการงานนี้ออกจากประวัติ? การดำเนินการนี้ใช้เมื่องานไม่มีไฟล์เหลือแล้ว")) return;
+    deleteRecord.disabled = true;
+    const response = await fetch(`${base}/api/jobs/${encodeURIComponent(deleteRecord.dataset.job)}`, { method: "DELETE", headers: headers() });
+    if (!response.ok) alert(await response.text());
+    await load(); return;
+  }
   const editButton = event.target.closest(".edit-transcript");
   if (editButton) { await openTranscript(jobsById.get(editButton.dataset.job)); return; }
   const playButton = event.target.closest(".play-media");

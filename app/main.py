@@ -103,9 +103,56 @@ class LibraryConversion(BaseModel):
     resolution: str = Field(default="original", pattern="^(original|1080|720|480|360)$")
 
 
+class FileDestination(BaseModel):
+    destination: str = Field(pattern="^(downloads|documents|desktop|music|videos)$")
+
+
 ALLOWED_UPLOADS = {".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mov", ".mkv", ".aac", ".flac", ".ogg", ".opus", ".mpeg", ".mpg"}
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 MIN_FREE_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
+USER_HOME = Path.home().resolve()
+FILE_DESTINATIONS = {
+    "downloads": ("Downloads", USER_HOME / "Downloads" / "Personal Media Hub"),
+    "documents": ("Documents", USER_HOME / "Documents" / "Personal Media Hub"),
+    "desktop": ("Desktop", USER_HOME / "Desktop" / "Personal Media Hub"),
+    "music": ("Music", USER_HOME / "Music" / "Personal Media Hub"),
+    "videos": ("Videos", USER_HOME / "Videos" / "Personal Media Hub"),
+}
+
+
+def actual_job_files(job) -> list[str]:
+    folder = Path(job.output_dir).resolve()
+    if not folder.is_dir():
+        return []
+    return sorted(path.name for path in folder.iterdir() if path.is_file())
+
+
+def job_file(job_id: str, filename: str):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "ไม่พบงาน")
+    folder = Path(job.output_dir).resolve()
+    target = (folder / filename).resolve()
+    if target.parent != folder or not target.is_file():
+        raise HTTPException(404, "ไม่พบไฟล์")
+    return job, target
+
+
+def destination_path(key: str, filename: str) -> Path:
+    try:
+        _, folder = FILE_DESTINATIONS[key]
+    except KeyError as exc:
+        raise HTTPException(400, "โฟลเดอร์ปลายทางไม่รองรับ") from exc
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / filename
+    if not target.exists():
+        return target
+    index = 2
+    while True:
+        candidate = folder / f"{target.stem} ({index}){target.suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
 
 
 @app.get("/")
@@ -174,6 +221,10 @@ def jobs(
         if archived == "closed" and not job.archived:
             continue
         item = asdict(job)
+        actual_files = actual_job_files(job)
+        item["missing_files"] = sorted(set(job.files) - set(actual_files))
+        item["files"] = actual_files
+        item["folder_exists"] = Path(job.output_dir).is_dir()
         item_platform = "Local File" if job.url.startswith("local://") else platform_name(job.url)
         if needle and needle not in f"{job.title or ''} {job.url}".casefold():
             continue
@@ -190,6 +241,64 @@ def jobs(
         item["platform"] = item_platform
         results.append(item)
     return results
+
+
+@app.get("/api/file-destinations", dependencies=[Depends(require_access)])
+def file_destinations() -> list[dict[str, str]]:
+    return [
+        {"id": key, "label": label, "path": str(path)}
+        for key, (label, path) in FILE_DESTINATIONS.items()
+    ]
+
+
+@app.post("/api/jobs/{job_id}/files/{filename}/copy", dependencies=[Depends(require_access)])
+def copy_job_file(job_id: str, filename: str, request: FileDestination) -> dict[str, str]:
+    _, source = job_file(job_id, filename)
+    target = destination_path(request.destination, source.name)
+    shutil.copy2(source, target)
+    return {"status": "copied", "destination": str(target)}
+
+
+@app.post("/api/jobs/{job_id}/files/{filename}/move", dependencies=[Depends(require_access)])
+def move_job_file(job_id: str, filename: str, request: FileDestination) -> dict[str, str]:
+    job, source = job_file(job_id, filename)
+    target = destination_path(request.destination, source.name)
+    shutil.move(str(source), str(target))
+    changes: dict[str, Any] = {"files": actual_job_files(job)}
+    if job.input_path and Path(job.input_path).resolve() == source:
+        changes["input_path"] = str(target)
+    store.update(job, **changes)
+    return {"status": "moved", "destination": str(target)}
+
+
+@app.delete("/api/jobs/{job_id}/files/{filename}", dependencies=[Depends(require_access)])
+def delete_job_file(job_id: str, filename: str) -> dict[str, str]:
+    job, target = job_file(job_id, filename)
+    target.unlink()
+    changes: dict[str, Any] = {"files": actual_job_files(job)}
+    if job.input_path and Path(job.input_path).resolve() == target:
+        changes["input_path"] = None
+    store.update(job, **changes)
+    return {"status": "deleted", "filename": filename}
+
+
+@app.delete("/api/jobs/{job_id}", dependencies=[Depends(require_access)])
+def delete_job_record(job_id: str) -> dict[str, str]:
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "ไม่พบงาน")
+    if job.status in {"queued", "preparing", "downloading", "converting", "transcribing", "exporting"}:
+        raise HTTPException(409, "กรุณายกเลิกงานก่อนลบรายการ")
+    folder = Path(job.output_dir).resolve()
+    if actual_job_files(job):
+        raise HTTPException(409, "งานนี้ยังมีไฟล์ กรุณาย้ายหรือลบไฟล์ก่อน")
+    if folder.is_dir():
+        try:
+            folder.rmdir()
+        except OSError as exc:
+            raise HTTPException(409, "โฟลเดอร์งานยังมีข้อมูลอื่นอยู่") from exc
+    store.remove(job_id)
+    return {"status": "deleted", "job_id": job_id}
 
 
 @app.post("/api/open-jobs-folder", dependencies=[Depends(require_access)])
