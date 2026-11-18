@@ -239,6 +239,20 @@ jobsEl.onclick = async (event) => {
 };
 
 document.querySelector("#refresh").onclick = load;
+document.querySelector("#open-jobs-folder").onclick = async (event) => {
+  const button = event.currentTarget;
+  const message = document.querySelector("#folder-message");
+  button.disabled = true; message.textContent = "กำลังเปิด File Explorer บน Dell…";
+  try {
+    const response = await fetch(`${base}/api/open-jobs-folder`, { method: "POST", headers: headers() });
+    if (!response.ok) throw Error(await response.text());
+    message.textContent = "เปิดโฟลเดอร์งานรวมบนหน้าจอ Dell แล้ว";
+  } catch (error) {
+    message.textContent = `เปิดโฟลเดอร์ไม่สำเร็จ: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+};
 document.querySelector("#preview-close").onclick = () => { document.querySelector("#library-audio").pause(); document.querySelector("#library-video").pause(); document.querySelector("#library-preview").hidden = true; };
 document.querySelectorAll("#filter-search,#filter-status,#filter-media,#filter-archived").forEach((control) => control.addEventListener("input", load));
 load();
