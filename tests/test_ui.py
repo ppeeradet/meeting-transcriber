@@ -9,8 +9,8 @@ class UiDeliveryTests(unittest.TestCase):
         response = main_module.index()
         self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
         html = (main_module.BASE_DIR / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("static/app.js?v=20261118-2", html)
-        self.assertIn("static/job-actions.css?v=20261118-2", html)
+        self.assertIn("static/app.js?v=20261118-3", html)
+        self.assertIn("static/job-actions.css?v=20261118-3", html)
 
     def test_each_eligible_job_has_an_individual_close_label(self):
         script = (main_module.BASE_DIR / "static" / "app.js").read_text(encoding="utf-8")

@@ -9,6 +9,64 @@ from fastapi import HTTPException
 
 
 class MediaLibraryTests(unittest.TestCase):
+    def test_job_listing_uses_actual_files_and_marks_missing_records(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            job = store.add("https://youtu.be/demo", "งาน", False, "th")
+            actual = Path(job.output_dir) / "actual.mp3"
+            actual.write_bytes(b"media")
+            store.update(job, status="completed", files=["deleted.mp3"])
+            with patch.object(main_module, "store", store):
+                result = main_module.jobs()[0]
+            self.assertEqual(result["files"], ["actual.mp3"])
+            self.assertEqual(result["missing_files"], ["deleted.mp3"])
+            self.assertTrue(result["folder_exists"])
+
+    def test_copy_move_and_delete_file_use_allowlisted_destination(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = JobStore(root / "data")
+            job = store.add("https://youtu.be/demo", "งาน", False, "th")
+            source = Path(job.output_dir) / "result.mp3"
+            source.write_bytes(b"media")
+            destination = root / "downloads"
+            request = main_module.FileDestination(destination="downloads")
+            allowed = {"downloads": ("Downloads", destination)}
+            with patch.object(main_module, "store", store), patch.object(main_module, "FILE_DESTINATIONS", allowed):
+                copied = main_module.copy_job_file(job.id, source.name, request)
+                moved = main_module.move_job_file(job.id, source.name, request)
+                moved_path = Path(moved["destination"])
+                replacement = Path(job.output_dir) / "delete.mp3"
+                replacement.write_bytes(b"delete")
+                deleted = main_module.delete_job_file(job.id, replacement.name)
+            self.assertTrue(Path(copied["destination"]).is_file())
+            self.assertTrue(moved_path.is_file())
+            self.assertFalse(source.exists())
+            self.assertEqual(deleted["status"], "deleted")
+            self.assertFalse(replacement.exists())
+
+    def test_delete_empty_job_record_removes_json_and_sqlite_record(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = JobStore(root)
+            job = store.add("https://youtu.be/demo", "งาน", False, "th")
+            store.update(job, status="completed")
+            with patch.object(main_module, "store", store):
+                result = main_module.delete_job_record(job.id)
+            self.assertEqual(result["status"], "deleted")
+            self.assertNotIn(job.id, store.jobs)
+            self.assertNotIn(job.id, JobStore(root).jobs)
+
+    def test_delete_job_record_rejects_jobs_that_still_have_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp))
+            job = store.add("https://youtu.be/demo", "งาน", False, "th")
+            (Path(job.output_dir) / "keep.mp3").write_bytes(b"media")
+            store.update(job, status="completed")
+            with patch.object(main_module, "store", store), self.assertRaises(HTTPException) as caught:
+                main_module.delete_job_record(job.id)
+            self.assertEqual(caught.exception.status_code, 409)
+
     def test_archived_jobs_are_hidden_by_default_and_can_be_filtered(self):
         with tempfile.TemporaryDirectory() as temp:
             store = JobStore(Path(temp))
