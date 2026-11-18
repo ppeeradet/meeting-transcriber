@@ -410,16 +410,6 @@ def cancel_job(job_id: str) -> dict:
 ARCHIVABLE_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 
 
-@app.post("/api/jobs/archive-finished", dependencies=[Depends(require_access)])
-def archive_finished_jobs() -> dict:
-    archived_ids: list[str] = []
-    for job in store.all():
-        if not job.archived and job.status in ARCHIVABLE_STATUSES:
-            store.set_archived(job, True)
-            archived_ids.append(job.id)
-    return {"archived": len(archived_ids), "job_ids": archived_ids}
-
-
 @app.post("/api/jobs/{job_id}/archive", dependencies=[Depends(require_access)])
 def archive_job(job_id: str) -> dict:
     job = store.jobs.get(job_id)

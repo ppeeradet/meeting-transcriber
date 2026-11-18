@@ -1,0 +1,26 @@
+.job-head {
+  align-items: flex-start;
+}
+
+.job-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.job-head-actions .ghost {
+  padding: 8px 12px;
+}
+
+@media (max-width: 650px) {
+  .job-head-actions {
+    justify-content: space-between;
+    margin-top: 10px;
+  }
+
+  .job-head-actions .ghost {
+    width: auto;
+  }
+}
