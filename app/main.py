@@ -192,6 +192,19 @@ def jobs(
     return results
 
 
+@app.post("/api/open-jobs-folder", dependencies=[Depends(require_access)])
+def open_jobs_folder() -> dict[str, str]:
+    folder = store.jobs_root.resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        raise HTTPException(501, "ฟังก์ชันนี้รองรับเฉพาะ Dell Windows")
+    try:
+        subprocess.Popen(["explorer.exe", str(folder)], shell=False, close_fds=True)
+    except OSError as exc:
+        raise HTTPException(500, "ไม่สามารถเปิด File Explorer บน Dell ได้") from exc
+    return {"status": "opened", "folder": str(folder)}
+
+
 @app.post("/api/jobs", status_code=202, dependencies=[Depends(require_access)])
 def create_jobs(request: CreateJobs) -> list[dict]:
     direct_hosts = {item.strip() for item in os.environ.get("MEETING_DIRECT_MEDIA_HOSTS", "").split(",") if item.strip()}
